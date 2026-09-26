@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Notificaciones{% endblock %}
+{% block content %}
+<div class="dashboard">
+    <span class="eyebrow">NOTIFICACIONES</span>
+    <h1>Notificaciones</h1>
+
+    <div class="panel">
+        {% if notificaciones %}
+            <div class="stack">
+                {% for item in notificaciones %}
+                    <div class="offer-item">
+                        <div>
+                            <strong>{{ item.mensaje }}</strong>
+                            <div class="offer-meta">
+                                <span>{{ item.creado_en }}</span>
+                                {% if item.leida %}
+                                    <span>Leída</span>
+                                {% else %}
+                                    <span>No leída</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <p>No tienes notificaciones por el momento.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

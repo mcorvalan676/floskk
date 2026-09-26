@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}{{ oferta.titulo }}{% endblock %}
+{% block content %}
+<div class="dashboard">
+    <span class="eyebrow">OFERTA</span>
+    <h1>{{ oferta.titulo }}</h1>
+    <p class="muted">{{ oferta.nombre_empresa }}</p>
+
+    <div class="two-col">
+        <div class="panel">
+            <p><strong>Ubicación:</strong> {{ oferta.ubicacion or 'No especificada' }}</p>
+            <p><strong>Tipo de contrato:</strong> {{ oferta.tipo_contrato or 'No especificado' }}</p>
+            <p><strong>Jornada:</strong> {{ oferta.jornada or 'No especificada' }}</p>
+            <p><strong>Rango salarial:</strong> {{ oferta.rango_salarial or 'No especificado' }}</p>
+            <p><strong>Estado:</strong> <span class="status activa">{{ oferta.estado }}</span></p>
+
+            <h3>Descripción</h3>
+            <p>{{ oferta.descripcion }}</p>
+
+            <h3>Requisitos</h3>
+            <p>{{ oferta.requisitos or 'Sin requisitos detallados aún.' }}</p>
+
+            <h3>Habilidades clave</h3>
+            <p>{{ oferta.habilidades or 'No se especificaron habilidades.' }}</p>
+        </div>
+
+        <div class="panel">
+            {% if compatibilidad is not none %}
+                <h3>Compatibilidad</h3>
+                <p><strong>{{ compatibilidad }}%</strong> de coincidencia con tu perfil.</p>
+            {% endif %}
+
+            {% if session.get('rol') == 'POSTULANTE' %}
+                <form method="post" action="{{ url_for('postular', oferta_id=oferta.id) }}">
+                    <button class="btn primary" type="submit">Postular a esta oferta</button>
+                </form>
+            {% else %}
+                <p class="muted">Inicia sesión como postulante para postular a esta vacante.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Perfil de candidato{% endblock %}
+{% block content %}
+<div class="dashboard">
+    <a href="{{ url_for('empresa_candidatos') }}">← Volver a candidatos</a>
+    <span class="eyebrow">PERFIL PRIVADO · {{ candidato.titulo }}</span>
+    <h1>{{ candidato.nombre }} {{ candidato.apellido }}</h1>
+    <p class="muted">{{ candidato.estado }} · Postulación {{ candidato.fecha_postulacion }}</p>
+
+    <div class="cards">
+        <article>
+            <h3>Contacto</h3>
+            <p>{{ candidato.correo }}</p>
+            <p>{{ candidato.telefono or 'Teléfono no informado' }}</p>
+            <p>{{ candidato.ciudad or '' }} {{ candidato.region or '' }}</p>
+        </article>
+        <article>
+            <h3>Presentación</h3>
+            <p>{{ candidato.descripcion or 'Sin descripción profesional.' }}</p>
+            <p><strong>Objetivo:</strong> {{ candidato.objetivo_profesional or 'No informado' }}</p>
+        </article>
+        <article>
+            <h3>Experiencia y educación</h3>
+            <p><strong>Experiencia:</strong> {{ candidato.experiencia or 'No informada' }}</p>
+            <p><strong>Educación:</strong> {{ candidato.educacion or 'No informada' }}</p>
+        </article>
+    </div>
+
+    <section class="panel" style="margin-top:20px;">
+        <h2>Habilidades</h2>
+        <p>{{ candidato.habilidades or 'Sin habilidades registradas.' }}</p>
+        {% if candidato.curriculum_archivo %}
+            <a class="btn primary" href="{{ url_for('empresa_candidato_cv', postulacion_id=candidato.id) }}">Descargar CV privado</a>
+        {% else %}
+            <p>Este postulante aún no ha cargado un CV.</p>
+        {% endif %}
+        {% if candidato.video_url %}
+            <a class="btn secondary" href="{{ candidato.video_url }}" target="_blank" rel="noopener noreferrer">Ver presentación en video</a>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

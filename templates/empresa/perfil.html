@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Perfil empresa{% endblock %}
+{% block content %}
+<div class="form-card">
+    <h1>Perfil de empresa</h1>
+    <p>Define la información pública y profesional de tu organización.</p>
+
+    <form method="post">
+        <label>Nombre de la empresa
+            <input name="nombre_empresa" value="{{ perfil.nombre_empresa or '' }}" required>
+        </label>
+        <label>Descripción
+            <textarea name="descripcion">{{ perfil.descripcion or '' }}</textarea>
+        </label>
+        <div class="grid">
+            <label>Sector
+                <input name="sector" value="{{ perfil.sector or '' }}">
+            </label>
+            <label>Ubicación
+                <input name="ubicacion" value="{{ perfil.ubicacion or '' }}">
+            </label>
+        </div>
+        <div class="grid">
+            <label>Sitio web
+                <input name="sitio_web" value="{{ perfil.sitio_web or '' }}">
+            </label>
+            <label>Teléfono
+                <input name="telefono" value="{{ perfil.telefono or '' }}">
+            </label>
+        </div>
+        <button class="btn primary" type="submit">Guardar perfil</button>
+    </form>
+</div>
+{% endblock %}

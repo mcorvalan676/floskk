@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Dashboard empresa{% endblock %}
+{% block content %}
+<div class="dashboard">
+    <span class="eyebrow">EMPRESA</span>
+    <h1>Bienvenido, {{ session.get('nombre') }}</h1>
+    <p>Gestiona publicaciones, revisa postulaciones y organiza el proceso de selección.</p>
+
+    <div class="actions">
+        <a class="btn primary" href="{{ url_for('oferta_nueva') }}">Crear oferta</a>
+        <a class="btn secondary" href="{{ url_for('empresa_perfil') }}">Mi perfil</a>
+        <a class="btn secondary" href="{{ url_for('empresa_candidatos') }}">Ver candidatos</a>
+        <a class="btn secondary" href="{{ url_for('empresa_entrevistas') }}">Entrevistas</a>
+    </div>
+
+    <div class="cards">
+        <article><h3>Ofertas activas</h3><strong>{{ ofertas_activas }}</strong><p>Vacantes activas publicadas por tu empresa.</p></article>
+        <article><h3>Candidatos</h3><strong>{{ postulaciones|length }}</strong><p>Personas que han postulado.</p></article>
+        <article><h3>En revisión</h3><strong>{{ en_revision }}</strong><p>Candidatos que estás evaluando.</p></article>
+        <article><h3>Preseleccionados</h3><strong>{{ preseleccionados }}</strong><p>Candidatos que avanzan a la siguiente etapa.</p></article>
+        <article><h3>Entrevistas pendientes</h3><strong>{{ entrevistas_pendientes }}</strong><p>Entrevistas por realizar.</p></article>
+    </div>
+
+    <section class="panel" style="margin-top:24px;">
+        <h2>Mis ofertas</h2>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Cargo</th><th>Ubicación</th><th>Estado</th><th>Actualizar</th></tr></thead>
+                <tbody>
+                    {% for oferta in ofertas %}
+                        <tr>
+                            <td>{{ oferta.titulo }}</td>
+                            <td>{{ oferta.ubicacion or 'No especificada' }}</td>
+                            <td>{{ oferta.estado }}</td>
+                            <td>
+                                <form method="post" action="{{ url_for('actualizar_estado_oferta', oferta_id=oferta.id) }}">
+                                    <select name="estado">
+                                        {% for estado in ('ACTIVA', 'PAUSADA', 'CERRADA') %}
+                                            <option value="{{ estado }}" {% if oferta.estado == estado %}selected{% endif %}>{{ estado }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    <button class="btn small primary" type="submit">Guardar</button>
+                                </form>
+                            </td>
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="4">Todavía no has publicado ofertas.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</div>
+{% endblock %}

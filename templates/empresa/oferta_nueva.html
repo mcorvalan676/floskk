@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Crear oferta{% endblock %}
+{% block content %}
+<div class="form-card">
+    <h1>Publicar oferta</h1>
+    <p>Completa los datos para crear una nueva vacante.</p>
+    <form method="post">
+        <label>Título del puesto
+            <input name="titulo" required>
+        </label>
+        <label>Descripción
+            <textarea name="descripcion" required></textarea>
+        </label>
+        <label>Requisitos
+            <textarea name="requisitos" placeholder="Experiencia, educación y otros requisitos"></textarea>
+        </label>
+        <div class="grid">
+            <label>Experiencia requerida
+                <input name="experiencia_requerida" placeholder="Ej.: 1 año en desarrollo">
+            </label>
+            <label>Educación requerida
+                <input name="educacion_requerida" placeholder="Ej.: técnico en informática">
+            </label>
+        </div>
+        <div class="grid">
+            <label>Habilidades clave
+                <input name="habilidades" placeholder="Python, Flask, MySQL">
+            </label>
+            <label>Ubicación
+                <input name="ubicacion">
+            </label>
+        </div>
+        <div class="grid">
+            <label>Tipo de contrato
+                <input name="tipo_contrato">
+            </label>
+            <label>Jornada
+                <input name="jornada">
+            </label>
+        </div>
+        <label>Rango salarial
+            <input name="rango_salarial">
+        </label>
+        <label>Fecha de cierre
+            <input type="date" name="fecha_cierre">
+        </label>
+        <button class="btn primary" type="submit">Guardar oferta</button>
+    </form>
+</div>
+{% endblock %}

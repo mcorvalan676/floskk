@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Administración{% endblock %}
+{% block content %}
+<div class="dashboard">
+    <span class="eyebrow">ADMINISTRACIÓN</span>
+    <h1>Panel de administración</h1>
+    <div class="cards">
+        <article><h3>Usuarios</h3><strong>{{ stats.usuarios }}</strong></article>
+        <article><h3>Empresas</h3><strong>{{ stats.empresas }}</strong></article>
+        <article><h3>Postulantes</h3><strong>{{ stats.postulantes }}</strong></article>
+        <article><h3>Ofertas activas</h3><strong>{{ stats.ofertas_activas }}</strong></article>
+        <article><h3>Postulaciones</h3><strong>{{ stats.postulaciones }}</strong></article>
+        <article><h3>Procesos finalizados</h3><strong>{{ stats.procesos_finalizados }}</strong></article>
+    </div>
+    <section class="panel" style="margin-top:24px;">
+        <h2>Cuentas registradas</h2>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Usuario</th><th>Correo</th><th>Rol</th><th>Estado</th><th>Acción</th></tr></thead>
+                <tbody>
+                    {% for usuario in usuarios %}
+                        <tr>
+                            <td>{{ usuario.nombre }} {{ usuario.apellido }}</td>
+                            <td>{{ usuario.correo }}</td>
+                            <td>{{ usuario.rol }}</td>
+                            <td>{{ 'Activa' if usuario.activo else 'Inactiva' }}</td>
+                            <td>
+                                {% if usuario.rol in ('EMPRESA', 'POSTULANTE') %}
+                                    <form method="post" action="{{ url_for('actualizar_estado_usuario', usuario_id=usuario.id) }}">
+                                        <input type="hidden" name="activo" value="{{ 0 if usuario.activo else 1 }}">
+                                        <button class="btn small {{ 'secondary' if usuario.activo else 'primary' }}" type="submit">
+                                            {{ 'Desactivar' if usuario.activo else 'Activar' }}
+                                        </button>
+                                    </form>
+                                {% else %}
+                                    No administrable
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="5">No hay cuentas registradas.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</div>
+{% endblock %}

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Perfil postulante{% endblock %}
+{% block content %}
+<div class="form-card">
+    <h1>Perfil profesional</h1>
+    <p>Actualiza tus datos para presentar mejor tu perfil a las empresas.</p>
+
+    <form method="post" enctype="multipart/form-data">
+        <div class="grid">
+            <label>Teléfono
+                <input name="telefono" value="{{ perfil.telefono or '' }}">
+            </label>
+            <label>Ciudad
+                <input name="ciudad" value="{{ perfil.ciudad or '' }}">
+            </label>
+        </div>
+        <div class="grid">
+            <label>Región
+                <input name="region" value="{{ perfil.region or '' }}">
+            </label>
+            <label>Habilidades
+                <input name="habilidades" value="{{ perfil.habilidades or '' }}">
+            </label>
+        </div>
+        <label>Descripción personal
+            <textarea name="descripcion">{{ perfil.descripcion or '' }}</textarea>
+        </label>
+        <label>Objetivo profesional
+            <textarea name="objetivo_profesional">{{ perfil.objetivo_profesional or '' }}</textarea>
+        </label>
+        <label>Experiencia
+            <textarea name="experiencia">{{ perfil.experiencia or '' }}</textarea>
+        </label>
+        <label>Educación
+            <textarea name="educacion">{{ perfil.educacion or '' }}</textarea>
+        </label>
+        <label>Currículum (PDF, máximo 10 MB)
+            <input type="file" name="curriculum" accept="application/pdf,.pdf">
+        </label>
+        {% if perfil.curriculum_archivo %}
+            <p><a href="{{ url_for('postulante_cv') }}">Descargar mi currículum actual</a></p>
+        {% endif %}
+        <label>Video de presentación (URL)
+            <input type="url" name="video_url" value="{{ perfil.video_url or '' }}" placeholder="https://...">
+        </label>
+        {% if perfil.video_url %}
+            <label><input type="checkbox" name="eliminar_video" value="1"> Eliminar enlace del video</label>
+        {% endif %}
+        <button class="btn primary" type="submit">Guardar perfil</button>
+    </form>
+</div>
+{% endblock %}

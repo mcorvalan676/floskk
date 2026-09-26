@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}ConectaTalento{% endblock %}
+{% block content %}
+<section class="hero">
+    <div>
+        <span class="eyebrow">RECLUTAMIENTO Y SELECCIÓN</span>
+        <h1>Conectamos talento con oportunidades.</h1>
+        <p>Una plataforma pensada para hacer que la contratación sea más ordenada, clara y eficiente.</p>
+        <div class="actions">
+            <a class="btn primary" href="{{ url_for('ofertas') }}">Buscar oportunidades</a>
+            <a class="btn secondary" href="{{ url_for('register') }}">Soy empresa</a>
+        </div>
+    </div>
+</section>
+
+<section>
+    <h2>¿Cómo funciona?</h2>
+    <div class="cards">
+        <article><b>01</b><h3>Crea tu perfil</h3><p>Presenta experiencia, habilidades y objetivos.</p></article>
+        <article><b>02</b><h3>Encuentra oportunidades</h3><p>Busca ofertas laborales según tus intereses.</p></article>
+        <article><b>03</b><h3>Avanza en el proceso</h3><p>Postula y sigue el estado de tu proceso.</p></article>
+    </div>
+</section>
+
+<section class="panel" id="php-integration" data-endpoint="http://127.0.0.1:8000/servicio.php" style="margin-top:28px;">
+    <h2>Actividad por sector</h2>
+    <p class="muted" data-integration-status>Consultando el servicio complementario PHP...</p>
+    <ul data-sector-list></ul>
+</section>
+{% endblock %}

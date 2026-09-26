@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Ofertas laborales{% endblock %}
+{% block content %}
+<div class="dashboard">
+    <span class="eyebrow">OPORTUNIDADES</span>
+    <h1>Ofertas disponibles</h1>
+    <p class="muted">Explora las vacantes publicadas por las empresas.</p>
+
+    <form method="get" class="panel grid" aria-label="Buscar ofertas">
+        <label>Cargo
+            <input name="cargo" value="{{ filtros.cargo }}" placeholder="Desarrollador web">
+        </label>
+        <label>Ciudad
+            <input name="ciudad" value="{{ filtros.ciudad }}" placeholder="Santiago">
+        </label>
+        <label>Tipo de contrato
+            <input name="contrato" value="{{ filtros.contrato }}" placeholder="Indefinido">
+        </label>
+        <label>Jornada
+            <input name="jornada" value="{{ filtros.jornada }}" placeholder="Jornada completa">
+        </label>
+        <label>Habilidad
+            <input name="habilidad" value="{{ filtros.habilidad }}" placeholder="Python">
+        </label>
+        <button class="btn primary" type="submit">Buscar</button>
+    </form>
+
+    <div class="stack">
+        {% for oferta in ofertas %}
+            <div class="offer-item">
+                <div>
+                    <h3>{{ oferta.titulo }}</h3>
+                    <div class="offer-meta">
+                        <span>{{ oferta.nombre_empresa }}</span>
+                        <span>{{ oferta.ubicacion or 'Remoto' }}</span>
+                        <span>{{ oferta.tipo_contrato or 'No especificado' }}</span>
+                    </div>
+                    <p>{{ oferta.descripcion[:180] }}{% if oferta.descripcion|length > 180 %}...{% endif %}</p>
+                </div>
+                <div class="stack" style="min-width:160px;">
+                    <a class="btn primary small" href="{{ url_for('oferta_detalle', oferta_id=oferta.id) }}">Ver oferta</a>
+                    {% if session.get('rol') == 'POSTULANTE' %}
+                        <form method="post" action="{{ url_for('postular', oferta_id=oferta.id) }}">
+                            <button class="btn secondary small" type="submit">Postular</button>
+                        </form>
+                    {% endif %}
+                </div>
+            </div>
+        {% else %}
+            <div class="panel">
+                <p>No hay ofertas publicadas todavía.</p>
+            </div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

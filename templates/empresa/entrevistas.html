@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Entrevistas{% endblock %}
+{% block content %}
+<div class="dashboard">
+    <span class="eyebrow">EMPRESA</span>
+    <h1>Entrevistas</h1>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr><th>Candidato</th><th>Oferta</th><th>Fecha y hora</th><th>Modalidad</th><th>Lugar o enlace</th><th>Estado</th><th>Actualizar</th></tr>
+            </thead>
+            <tbody>
+                {% for entrevista in entrevistas %}
+                    <tr>
+                        <td>{{ entrevista.nombre }} {{ entrevista.apellido }}</td>
+                        <td>{{ entrevista.titulo }}</td>
+                        <td>{{ entrevista.fecha }} {{ entrevista.hora }}</td>
+                        <td>{{ entrevista.modalidad }}</td>
+                        <td>{{ entrevista.lugar or 'Por confirmar' }}</td>
+                        <td>{{ entrevista.estado }}</td>
+                        <td>
+                            <form method="post" action="{{ url_for('actualizar_estado_entrevista', entrevista_id=entrevista.id) }}">
+                                <select name="estado">
+                                    {% for estado in ('PENDIENTE', 'REALIZADA', 'CANCELADA') %}
+                                        <option value="{{ estado }}" {% if entrevista.estado == estado %}selected{% endif %}>{{ estado }}</option>
+                                    {% endfor %}
+                                </select>
+                                <button class="btn small primary" type="submit">Guardar</button>
+                            </form>
+                        </td>
+                    </tr>
+                {% else %}
+                    <tr><td colspan="7">Todavía no hay entrevistas programadas.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

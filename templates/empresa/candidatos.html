@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Candidatos{% endblock %}
+{% block content %}
+<div class="dashboard">
+    <span class="eyebrow">CANDIDATOS</span>
+    <h1>Postulaciones recibidas</h1>
+
+    <form method="get" class="panel grid" aria-label="Filtrar candidatos">
+        <label>Estado
+            <select name="estado">
+                <option value="">Todos</option>
+                {% for estado in estados %}
+                    <option value="{{ estado }}" {% if filtros.estado == estado %}selected{% endif %}>{{ estado }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>Ciudad
+            <input name="ciudad" value="{{ filtros.ciudad }}" placeholder="Ej.: Santiago">
+        </label>
+        <label>Habilidad
+            <input name="habilidad" value="{{ filtros.habilidad }}" placeholder="Ej.: Python">
+        </label>
+        <label>Experiencia
+            <input name="experiencia" value="{{ filtros.experiencia }}" placeholder="Ej.: soporte">
+        </label>
+        <label>Educación
+            <input name="educacion" value="{{ filtros.educacion }}" placeholder="Ej.: informática">
+        </label>
+        <button class="btn primary" type="submit">Filtrar</button>
+    </form>
+
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Candidato</th>
+                    <th>Oferta</th>
+                    <th>Compatibilidad</th>
+                    <th>Estado</th>
+                    <th>Fecha</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in postulaciones %}
+                    <tr>
+                        <td><a href="{{ url_for('empresa_candidato_detalle', postulacion_id=item.id) }}">{{ item.nombre }} {{ item.apellido }}</a></td>
+                        <td>{{ item.titulo }}</td>
+                        <td>{{ item.compatibilidad }}%</td>
+                        <td>
+                            <div class="stack">
+                                <span class="status {{ item.estado|lower }}">{{ item.estado }}</span>
+                                <form method="POST" action="{{ url_for('actualizar_estado_postulacion', postulacion_id=item.id) }}" style="margin-top:8px;">
+                                    <select name="estado">
+                                        <option value="POSTULADO">POSTULADO</option>
+                                        <option value="REVISION">REVISION</option>
+                                        <option value="PRESELECCIONADO">PRESELECCIONADO</option>
+                                        <option value="ENTREVISTA">ENTREVISTA</option>
+                                        <option value="SELECCIONADO">SELECCIONADO</option>
+                                        <option value="RECHAZADO">RECHAZADO</option>
+                                        <option value="FINALIZADO">FINALIZADO</option>
+                                    </select>
+                                    <textarea name="observacion" placeholder="Observación"></textarea>
+                                    <button class="btn small primary" type="submit" style="margin-top:8px;">Actualizar estado</button>
+                                </form>
+                                <form method="POST" action="{{ url_for('agendar_entrevista', postulacion_id=item.id) }}">
+                                    <div class="grid">
+                                        <input type="date" name="fecha" required>
+                                        <input type="time" name="hora" required>
+                                    </div>
+                                    <div class="grid" style="margin-top:8px;">
+                                        <select name="modalidad">
+                                            <option value="ONLINE">Online</option>
+                                            <option value="PRESENCIAL">Presencial</option>
+                                            <option value="TELEFONICA">Telefónica</option>
+                                        </select>
+                                        <input type="text" name="lugar" placeholder="Lugar o enlace">
+                                    </div>
+                                    <button class="btn small primary" type="submit" style="margin-top:8px;">Agendar entrevista</button>
+                                </form>
+                            </div>
+                        </td>
+                        <td>{{ item.fecha_postulacion }}</td>
+                    </tr>
+                {% else %}
+                    <tr>
+                        <td colspan="5">No hay postulaciones que coincidan con estos filtros.</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

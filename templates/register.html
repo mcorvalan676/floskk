@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Registrarse{% endblock %}
+{% block content %}
+<div class="form-card">
+<h1>Crear cuenta</h1>
+<form method="post">
+<div class="grid">
+<label>Nombre<input name="nombre" required></label>
+<label>Apellido<input name="apellido" required></label>
+</div>
+<label>Correo<input type="email" name="correo" required></label>
+<label>Contraseña<input type="password" name="password" minlength="6" required></label>
+<label>Tipo de cuenta
+<select name="rol">
+<option value="POSTULANTE">Postulante</option>
+<option value="EMPRESA">Empresa</option>
+</select>
+</label>
+<button class="btn primary" type="submit">Crear cuenta</button>
+</form>
+</div>
+{% endblock %}
