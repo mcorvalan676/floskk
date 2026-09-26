@@ -11,11 +11,21 @@ if not IS_CLOUDFLARE_WORKER:
     load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
+USE_SQLITE = os.getenv("USE_SQLITE", "1").lower() in {"1", "true", "yes", "y"}
+SECRET_KEY = os.getenv("SECRET_KEY")
+
+if not SECRET_KEY and not IS_CLOUDFLARE_WORKER and not USE_SQLITE:
+    raise RuntimeError(
+        "SECRET_KEY must be configured when SQLite is disabled."
+    )
+
+if not SECRET_KEY and USE_SQLITE and not IS_CLOUDFLARE_WORKER:
+    SECRET_KEY = "conectatalento-dev-key"
 
 
 class Config:
-    SECRET_KEY = os.getenv("SECRET_KEY", "conectatalento-dev-key")
-    USE_SQLITE = os.getenv("USE_SQLITE", "1").lower() in {"1", "true", "yes", "y"}
+    SECRET_KEY = SECRET_KEY
+    USE_SQLITE = USE_SQLITE
     CLOUDFLARE_WORKERS = IS_CLOUDFLARE_WORKER
     DEBUG = os.getenv("FLASK_DEBUG", "0").lower() in {"1", "true", "yes", "y"}
     MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")

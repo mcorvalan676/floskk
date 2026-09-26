@@ -35,6 +35,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "python-dotenv" },
     { name = "workers-py" },
     { name = "workers-runtime-sdk" },
 ]
@@ -47,6 +48,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "python-dotenv", specifier = ">=1.0,<2" },
     { name = "workers-py" },
     { name = "workers-runtime-sdk" },
 ]
@@ -303,6 +305,15 @@ resolution-markers = [
 sdist = { url = "https://files.pythonhosted.org/packages/f9/98/df30f080ce2ec52bbb02c3db039edd60fe85d977f6afbf90e09abeb34804/pyodide_py-314.0.7.tar.gz", hash = "sha256:a33774c96f9c51c138e3ef2295ae7b524064d9501e896ceb1a0aa6d4da55f9e5", size = 62895, upload-time = "2026-09-14T05:07:35.015Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f4/ec/f2848eda90e7b8571376a846bed27bff3f0d5b10bfd87792f1ac6e7d794d/pyodide_py-314.0.7-py3-none-any.whl", hash = "sha256:75377c696639863ea966330f2eff4a3b6bd1c58a95fbd339859e6949c4be35e3", size = 70473, upload-time = "2026-09-14T05:07:33.664Z" },
+]
+
+[[package]]
+name = "python-dotenv"
+version = "1.2.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/6a/53/ed9d74092561d4b01a2ef1349d52cdbc135e526c245f366b089cfca6de49/python_dotenv-1.2.3.tar.gz", hash = "sha256:a20a594dabeaa385725aa239d5244871c143ecb356add8a20fcf23773a6c3a35", size = 58945, upload-time = "2026-08-16T16:54:54.067Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0d/17/c5c6b53ddc18f297992099b3d9ec16c855c0ccc83263a21fe4d1c625ec6c/python_dotenv-1.2.3-py3-none-any.whl", hash = "sha256:904552145e8bfed22162c09dab1c2b9b54fefa7b23ba780f4f26ca0316b0f0d9", size = 22780, upload-time = "2026-08-16T16:54:52.473Z" },
 ]
 
 [[package]]

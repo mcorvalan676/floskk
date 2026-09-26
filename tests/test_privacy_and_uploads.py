@@ -3,7 +3,7 @@ import unittest
 import uuid
 from io import BytesIO
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import app as app_module
 
@@ -53,6 +53,62 @@ class PrivacyAndUploadsTest(unittest.TestCase):
         css.close()
         javascript.close()
 
+    def test_sqlite_creates_missing_database_directory(self):
+        database_path = Path(self.database_dir.name) / "missing" / "nested" / "test.db"
+        with patch.object(app_module.Config, "SQLITE_DB_PATH", str(database_path)):
+            connection = app_module.get_db()
+            connection.close()
+
+        self.assertTrue(database_path.is_file())
+
+    def test_mysql_initialization_does_not_seed_demo_accounts(self):
+        connection = MagicMock()
+        with (
+            patch.object(app_module.Config, "USE_SQLITE", False),
+            patch.object(app_module, "get_db", return_value=connection),
+        ):
+            app_module.init_db()
+
+        connection.commit.assert_called_once()
+
+    def test_fresh_sqlite_database_has_no_seeded_accounts_or_offers(self):
+        connection = app_module.get_db()
+        cursor = connection.cursor()
+        user_count = cursor.execute(
+            "SELECT COUNT(*) AS total FROM usuarios"
+        ).fetchone()["total"]
+        offer_count = cursor.execute(
+            "SELECT COUNT(*) AS total FROM ofertas"
+        ).fetchone()["total"]
+        cursor.close()
+        connection.close()
+
+        self.assertEqual(user_count, 0)
+        self.assertEqual(offer_count, 0)
+
+    def test_admin_can_be_provisioned_with_flask_cli(self):
+        with (
+            patch("builtins.input", side_effect=["Admin", "Prueba", "admin@example.test"]),
+            patch(
+                "getpass.getpass",
+                side_effect=["long-secure-password", "long-secure-password"],
+            ),
+        ):
+            result = app_module.app.test_cli_runner().invoke(
+                args=["create-admin"]
+            )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("Cuenta de administración creada", result.output)
+        self.client.post(
+            "/login",
+            data={
+                "correo": "admin@example.test",
+                "password": "long-secure-password",
+            },
+        )
+        self.assertEqual(self.client.get("/admin/dashboard").status_code, 200)
+
     def create_user(self, role):
         email = f"{role.lower()}_{uuid.uuid4().hex}@example.test"
         conn = app_module.get_db()
@@ -66,6 +122,12 @@ class PrivacyAndUploadsTest(unittest.TestCase):
             cur.execute(
                 "INSERT INTO empresas (usuario_id, nombre_empresa) VALUES (?, ?)",
                 (user_id, "Empresa " + uuid.uuid4().hex[:6]),
+            )
+            profile_id = cur.lastrowid
+        elif role == "ADMIN":
+            cur.execute(
+                "INSERT INTO administradores (usuario_id) VALUES (?)",
+                (user_id,),
             )
             profile_id = cur.lastrowid
         else:
@@ -109,19 +171,27 @@ class PrivacyAndUploadsTest(unittest.TestCase):
 
     def test_application_requires_cv(self):
         email, _, _ = self.create_user("POSTULANTE")
+        _, _, company_id = self.create_user("EMPRESA")
+        conn = app_module.get_db()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO ofertas (empresa_id, titulo, descripcion, estado) VALUES (?, ?, ?, 'ACTIVA')",
+            (company_id, "Oferta temporal de prueba", "Oferta creada solo para este test."),
+        )
+        offer_id = cur.lastrowid
+        conn.commit()
+        cur.close()
+        conn.close()
         self.client.post("/login", data={"correo": email, "password": "123456"})
         conn = app_module.get_db()
-        offer = conn.cursor().execute(
-            "SELECT id FROM ofertas WHERE estado = 'ACTIVA' ORDER BY id LIMIT 1"
-        ).fetchone()
         applicant = conn.cursor().execute(
             "SELECT p.id FROM postulantes p JOIN usuarios u ON u.id = p.usuario_id WHERE u.correo = ?",
             (email,),
         ).fetchone()
-        response = self.client.post(f"/postular/{offer['id']}", follow_redirects=True)
+        response = self.client.post(f"/postular/{offer_id}", follow_redirects=True)
         application = conn.cursor().execute(
             "SELECT id FROM postulaciones WHERE oferta_id = ? AND postulante_id = ?",
-            (offer["id"], applicant["id"]),
+            (offer_id, applicant["id"]),
         ).fetchone()
         conn.close()
 
@@ -182,9 +252,10 @@ class PrivacyAndUploadsTest(unittest.TestCase):
     def test_admin_dashboard_is_restricted_to_admin_role(self):
         response = self.client.get("/admin/dashboard")
         self.assertEqual(response.status_code, 302)
+        email, _, _ = self.create_user("ADMIN")
         self.client.post(
             "/login",
-            data={"correo": "admin@demo.cl", "password": "demo123"},
+            data={"correo": email, "password": "123456"},
         )
         response = self.client.get("/admin/dashboard")
         self.assertEqual(response.status_code, 200)

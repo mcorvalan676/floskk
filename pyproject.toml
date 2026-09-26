@@ -10,6 +10,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "python-dotenv>=1.0,<2",
     "workers-py",
     "workers-runtime-sdk",
 ]

@@ -92,6 +92,7 @@ def get_db():
         return MySQLConnectionAdapter(connect_hyperdrive(request.environ["workers.env"]))
 
     if Config.USE_SQLITE:
+        Path(Config.SQLITE_DB_PATH).parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(Config.SQLITE_DB_PATH)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
@@ -575,67 +576,48 @@ def init_db():
     if Config.USE_SQLITE:
         migrate_sqlite_schema()
 
-    seed_demo_accounts()
 
+@app.cli.command("create-admin")
+def create_admin_command():
+    from getpass import getpass
 
-def seed_demo_accounts():
+    nombre = input("Nombre: ").strip()
+    apellido = input("Apellido: ").strip()
+    correo = input("Correo: ").strip()
+    password = getpass("Contraseña (mínimo 12 caracteres): ")
+    confirmation = getpass("Confirma la contraseña: ")
+
+    if not nombre or not apellido or not correo or len(password) < 12:
+        raise SystemExit("Completa todos los campos y usa una contraseña de 12 caracteres como mínimo.")
+    if password != confirmation:
+        raise SystemExit("Las contraseñas no coinciden.")
+
     conn = get_db()
     cur = conn.cursor()
-
-    demo_users = [
-        ("Empresa", "Demo", "empresa@demo.cl", generate_password_hash("demo123"), "EMPRESA"),
-        ("Postulante", "Demo", "postulante@demo.cl", generate_password_hash("demo123"), "POSTULANTE"),
-        ("Administrador", "Demo", "admin@demo.cl", generate_password_hash("demo123"), "ADMIN"),
-    ]
     placeholder = "?" if Config.USE_SQLITE else "%s"
-
-    for nombre, apellido, correo, password_hash, rol in demo_users:
+    try:
         existing = cur.execute(
             f"SELECT id FROM usuarios WHERE correo = {placeholder}", (correo,)
         ).fetchone()
         if existing:
-            continue
+            raise SystemExit("Ya existe una cuenta con ese correo.")
         cur.execute(
-            f"INSERT INTO usuarios (nombre, apellido, correo, password_hash, rol, activo) VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, 1)",
-            (nombre, apellido, correo, password_hash, rol),
+            f"INSERT INTO usuarios (nombre, apellido, correo, password_hash, rol, activo) VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, 'ADMIN', 1)",
+            (nombre, apellido, correo, generate_password_hash(password)),
         )
+        cur.execute(
+            f"INSERT INTO administradores (usuario_id) VALUES ({placeholder})",
+            (cur.lastrowid,),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
 
-        user_id = cur.lastrowid
-        if rol == "POSTULANTE":
-            cur.execute(
-                f"INSERT INTO postulantes (usuario_id, ciudad, region, descripcion, objetivo_profesional, habilidades) VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})",
-                (user_id, "Santiago", "Metropolitana", "Estudiante y profesional en tecnología.", "Quiero crecer en desarrollo web.", "Python, Flask, MySQL, JavaScript"),
-            )
-            sincronizar_habilidades(cur, cur.lastrowid, "Python, Flask, MySQL, JavaScript")
-        elif rol == "EMPRESA":
-            cur.execute(
-                f"INSERT INTO empresas (usuario_id, nombre_empresa, descripcion, sector, ubicacion) VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})",
-                (user_id, "TecnoMaule", "Empresa de tecnología y soluciones digitales.", "Tecnología", "Santiago"),
-            )
-            company_id = cur.lastrowid
-            cur.execute(
-                f"INSERT INTO ofertas (empresa_id, titulo, descripcion, requisitos, habilidades, ubicacion, tipo_contrato, jornada, rango_salarial, estado) VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, 'ACTIVA')",
-                (
-                    company_id,
-                    "Desarrollador Web Junior",
-                    "Buscamos una persona con ganas de aprender y trabajar en proyectos web.",
-                    "Conocimientos básicos de Python y HTML.",
-                    "Python, Flask, MySQL, JavaScript",
-                    "Santiago",
-                    "Contrato indefinido",
-                    "Full time",
-                    "$900.000 - $1.200.000",
-                ),
-            )
-        else:
-            cur.execute(
-                f"INSERT INTO administradores (usuario_id) VALUES ({placeholder})",
-                (user_id,),
-            )
-
-    conn.commit()
-    cur.close()
-    conn.close()
+    print(f"Cuenta de administración creada para {correo}.")
 
 
 def get_user_by_email(correo):
@@ -1837,7 +1819,7 @@ def internal_error(error):
     return render_template("errors/500.html"), 500
 
 
-if not Config.CLOUDFLARE_WORKERS:
+if not Config.CLOUDFLARE_WORKERS and Config.USE_SQLITE:
     init_db()
 
 

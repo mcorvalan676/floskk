@@ -59,7 +59,7 @@ MYSQL_DATABASE=conectatalento
 SOURCE C:/ruta/al/proyecto/database/schema.sql;
 ```
 
-4. Carga datos ficticios opcionales:
+4. Opcionalmente, añade habilidades disponibles al catálogo:
 
 ```sql
 SOURCE C:/ruta/al/proyecto/database/seed.sql;
@@ -67,7 +67,9 @@ SOURCE C:/ruta/al/proyecto/database/seed.sql;
 
 5. Ejecuta Flask con `python app.py`.
 
-La aplicación también crea sus tablas principales al arrancar; `schema.sql` documenta las relaciones y se puede usar para preparar la base de datos manualmente.
+En SQLite local, Flask crea las tablas y el catálogo inicial de habilidades al arrancar; no crea usuarios, empresas ni ofertas ficticias. En MySQL, inicializa el esquema manualmente con `schema.sql`; `seed.sql` solo añade habilidades y no se debe usar para cargar datos de producción.
+
+Para crear la primera cuenta administradora, ejecuta `python -m flask --app app create-admin`. El comando solicita los datos y la contraseña sin mostrarla, exige 12 caracteres como mínimo y no crea credenciales predeterminadas. Asegúrate de configurar `SECRET_KEY` y, en MySQL, el esquema antes de ejecutarlo.
 
 ## Servicio PHP opcional
 
@@ -96,7 +98,7 @@ El Worker usa el entry point WSGI de Cloudflare para ejecutar Flask. Flask sigue
    npx wrangler login
    ```
 
-2. Conserva el MySQL existente o prepara una base MySQL accesible públicamente desde Cloudflare. Hyperdrive necesita poder conectarse al host. Ejecuta `database/schema.sql` contra esa base antes del despliegue. El Worker no inicializa tablas ni crea cuentas demo al arrancar; provisiona cuentas de producción de forma segura y no uses las credenciales demo documentadas arriba.
+2. Conserva el MySQL existente o prepara una base MySQL accesible desde Cloudflare. Hyperdrive necesita poder conectarse al host. Ejecuta `database/schema.sql` contra esa base antes del despliegue. El Worker no inicializa tablas ni crea usuarios/empresas/ofertas al arrancar. Provisiona una cuenta administradora de forma segura con el comando anterior.
 
 3. En Cloudflare, crea una configuración Hyperdrive que apunte a esa base MySQL. En `wrangler.jsonc`, sustituye `REPLACE_WITH_HYPERDRIVE_ID` por el identificador devuelto por Cloudflare. No guardes la cadena de conexión ni credenciales de MySQL en el repositorio.
 
@@ -116,14 +118,15 @@ El Worker usa el entry point WSGI de Cloudflare para ejecutar Flask. Flask sigue
 
    Genera una clave aleatoria larga localmente; no la incluyas en comandos compartidos ni en archivos versionados.
 
-7. Para probar localmente el runtime Worker y, cuando apruebes los cambios, desplegar:
+7. En Windows, usa el script de Wrangler para mantener los entornos virtuales fuera del escaneo de módulos Python. Sincroniza dependencias, aparta temporalmente los entornos locales ignorados mientras corre Wrangler y los restaura al terminar:
 
    ```powershell
-   uv run pywrangler dev
-   uv run pywrangler deploy
+   .\scripts\wrangler.ps1 dry-run
+   .\scripts\wrangler.ps1 dev --local --port 8787
+   .\scripts\wrangler.ps1 deploy
    ```
 
-   `pywrangler dev` requiere acceso a los bindings configurados. Para simular Hyperdrive en local, define temporalmente `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` con una URL MySQL local; no guardes esa cadena en Git. El arranque tradicional `python app.py` y `python -m unittest` siguen usando la configuración local y `requirements-local.txt`. Pywrangler no admite un `requirements.txt` en el raíz del proyecto; las dependencias Worker están declaradas exclusivamente en `pyproject.toml`.
+   `dev` requiere acceso a los bindings configurados. Para Hyperdrive local, define temporalmente `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` con una URL MySQL local; no guardes esa cadena en Git. El arranque tradicional `python app.py` y `python -m unittest` siguen usando la configuración local y `requirements-local.txt`. Pywrangler no admite un `requirements.txt` en el raíz del proyecto; las dependencias Worker están declaradas exclusivamente en `pyproject.toml`.
 
 ### Variables y bindings de producción
 
@@ -135,28 +138,16 @@ El Worker usa el entry point WSGI de Cloudflare para ejecutar Flask. Flask sigue
 | `ASSETS` | Binding de assets | Lectura de templates Jinja y recursos CSS/JS empaquetados. |
 | `PHP_SERVICE_URL` | Variable no secreta | URL HTTPS de `servicio.php` desplegado independientemente. |
 
-El Worker conserva MySQL y las tablas: no hay migración automática a D1. `mysql-connector-python` y `python-dotenv` permanecen para ejecución local; el bundle Worker declara Flask y PyMySQL en `pyproject.toml`, junto con el SDK/CLI de Workers para desarrollo. SQLite, la creación automática del esquema y las cuentas demo son exclusivamente locales.
+El Worker conserva MySQL y las tablas: no hay migración automática a D1. `mysql-connector-python` y `python-dotenv` se usan en la ejecución local y están declarados en `requirements-local.txt`; `python-dotenv` también figura en el grupo `dev` de `pyproject.toml` para que `uv sync` permita importar la app fuera del Worker. El bundle necesita Flask y PyMySQL, mientras el SDK/CLI de Workers se declara en el grupo de desarrollo. SQLite y la creación automática del esquema son exclusivamente locales; los usuarios se registran o se crean explícitamente con el comando de administración. En modo MySQL tradicional, configura `SECRET_KEY`; la clave fija de desarrollo solo se permite en modo SQLite local.
 
 `wrangler.jsonc` usa una fecha de compatibilidad vigente para Python Workers y la bandera `python_workers`. `.assetsignore` restringe los assets empaquetados a `templates/` y `static/`.
-
-## Usuarios demo
-
-Al iniciar Flask se crean si no existen:
-
-| Rol | Correo | Contraseña local |
-|---|---|---|
-| Empresa | `empresa@demo.cl` | `demo123` |
-| Postulante | `postulante@demo.cl` | `demo123` |
-| Administrador | `admin@demo.cl` | `demo123` |
-
-Estas credenciales son exclusivamente para desarrollo local. El postulante demo debe cargar un PDF para poder postular.
 
 ## Arquitectura y POO
 
 - `app.py`: creación de la aplicación, conexión a datos y rutas.
 - `models/`: clases `Usuario`, `Postulante`, `Empresa`, `OfertaLaboral`, `Postulacion`, `Curriculum`, `Entrevista`, `Notificacion` y `ProcesoSeleccion`.
 - `services/compatibilidad.py`: algoritmo simple de coincidencia de habilidades.
-- `database/schema.sql` y `database/seed.sql`: estructura relacional y datos ficticios de ejemplo.
+- `database/schema.sql` y `database/seed.sql`: estructura relacional y catálogo inicial de habilidades, sin cuentas ni ofertas precargadas.
 - `templates/`: landing, autenticación, paneles y vistas por rol.
 - `static/`: estilos responsive y JavaScript para la integración de estadísticas.
 - `php/integration/servicio.php`: endpoint auxiliar JSON.
