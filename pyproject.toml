@@ -1,0 +1,15 @@
+[project]
+name = "conectatalento"
+version = "0.1.0"
+description = "Plataforma de reclutamiento Flask desplegada en Cloudflare Workers."
+requires-python = ">=3.13"
+dependencies = [
+    "Flask>=3.1,<4",
+    "PyMySQL>=1.1,<2",
+]
+
+[dependency-groups]
+dev = [
+    "workers-py",
+    "workers-runtime-sdk",
+]

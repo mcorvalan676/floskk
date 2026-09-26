@@ -29,6 +29,30 @@ class PrivacyAndUploadsTest(unittest.TestCase):
         self.database_patch.stop()
         self.database_dir.cleanup()
 
+    def test_homepage_renders_jinja_and_utf8(self):
+        response = self.client.get("/")
+        page = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("charset=utf-8", response.content_type.lower())
+        self.assertIn("contratación", page)
+        self.assertIn("¿Cómo funciona?", page)
+        self.assertNotIn("{% extends", page)
+        self.assertNotIn("{% block", page)
+        self.assertNotIn("{% endblock", page)
+        self.assertNotIn("{{ url_for", page)
+
+    def test_static_assets_are_served_with_content_types(self):
+        css = self.client.get("/static/css/style.css")
+        javascript = self.client.get("/static/js/main.js")
+
+        self.assertEqual(css.status_code, 200)
+        self.assertIn("text/css", css.content_type)
+        self.assertEqual(javascript.status_code, 200)
+        self.assertIn("javascript", javascript.content_type)
+        css.close()
+        javascript.close()
+
     def create_user(self, role):
         email = f"{role.lower()}_{uuid.uuid4().hex}@example.test"
         conn = app_module.get_db()

@@ -5,6 +5,11 @@ __pycache__/
 .env
 .venv/
 venv/
+.wrangler/
+.dev.vars
+src/vendor/
+python_modules/
+.venv-workers/
 .DS_Store
 *.sqlite3
 *.db

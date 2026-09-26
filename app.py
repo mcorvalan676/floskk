@@ -1,13 +1,18 @@
-import sqlite3
 import uuid
 from datetime import date, time
+from io import BytesIO
 from pathlib import Path
 
-from flask import Flask, abort, flash, redirect, render_template, request, send_file, session, url_for
+from flask import Flask, Response, abort, flash, jsonify, redirect, render_template, request, send_file, send_from_directory, session, url_for
 from werkzeug.utils import secure_filename
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from config import Config
+if not Config.CLOUDFLARE_WORKERS:
+    import sqlite3
+    from urllib.error import URLError
+    from urllib.request import urlopen
+
 from models.curriculum import Curriculum
 from models.entrevista import Entrevista
 from models.notificacion import Notificacion
@@ -15,9 +20,10 @@ from models.postulacion import Postulacion
 from models.proceso_seleccion import ProcesoSeleccion
 from services.compatibilidad import calcular_compatibilidad
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder=None)
 app.config.from_object(Config)
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
+app.config["JSON_AS_ASCII"] = False
 
 BASE_DIR = Path(__file__).resolve().parent
 CV_UPLOAD_DIR = BASE_DIR / "uploads" / "cv"
@@ -58,6 +64,13 @@ class MySQLConnectionAdapter:
         self._connection = connection
 
     def cursor(self):
+        if Config.CLOUDFLARE_WORKERS:
+            import pymysql
+
+            return MySQLCursorAdapter(
+                self._connection.cursor(pymysql.cursors.DictCursor)
+            )
+
         from mysql.connector.cursor import MySQLCursorDict
 
         return MySQLCursorAdapter(self._connection.cursor(cursor_class=MySQLCursorDict))
@@ -73,6 +86,11 @@ class MySQLConnectionAdapter:
 
 
 def get_db():
+    if Config.CLOUDFLARE_WORKERS:
+        from cloudflare_runtime import connect_hyperdrive
+
+        return MySQLConnectionAdapter(connect_hyperdrive(request.environ["workers.env"]))
+
     if Config.USE_SQLITE:
         conn = sqlite3.connect(Config.SQLITE_DB_PATH)
         conn.row_factory = sqlite3.Row
@@ -636,6 +654,39 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/static/<path:filename>", endpoint="static")
+def static_assets(filename):
+    if Config.CLOUDFLARE_WORKERS:
+        from cloudflare_runtime import get_worker_asset
+
+        asset = get_worker_asset(request.environ["workers.env"], f"static/{filename}")
+        return Response(
+            asset.body,
+            status=asset.status,
+            headers=asset.headers,
+        )
+    return send_from_directory(BASE_DIR / "static", filename)
+
+
+@app.route("/api/php/sectores")
+def php_sector_proxy():
+    if Config.CLOUDFLARE_WORKERS:
+        from cloudflare_runtime import fetch_php_service
+
+        payload, status = fetch_php_service(request.environ["workers.env"])
+        return jsonify(payload), status
+
+    try:
+        with urlopen(Config.PHP_SERVICE_URL, timeout=3) as response:
+            payload = response.read().decode("utf-8")
+            return Response(payload, status=response.status, content_type="application/json; charset=utf-8")
+    except (URLError, TimeoutError, OSError):
+        return jsonify(
+            success=False,
+            message="El servicio PHP/MySQL no está disponible.",
+        ), 503
+
+
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if request.method == "POST":
@@ -932,8 +983,19 @@ def postulante_perfil():
                 return redirect(url_for("postulante_perfil"))
             cv.stream.seek(0)
             saved_cv_name = f"{uuid.uuid4().hex}.pdf"
-            CV_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-            cv.save(CV_UPLOAD_DIR / saved_cv_name)
+            cv_contents = cv.read()
+            if Config.CLOUDFLARE_WORKERS:
+                from cloudflare_runtime import save_cv_object
+
+                save_cv_object(
+                    request.environ["workers.env"],
+                    f"cv/{saved_cv_name}",
+                    cv_contents,
+                )
+                saved_cv_name = f"cv/{saved_cv_name}"
+            else:
+                CV_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+                (CV_UPLOAD_DIR / saved_cv_name).write_bytes(cv_contents)
 
         if Config.USE_SQLITE:
             cur.execute(
@@ -1412,6 +1474,19 @@ def empresa_candidato_cv(postulacion_id):
     conn.close()
     if candidato is None or not candidato["curriculum_archivo"]:
         abort(404)
+    if Config.CLOUDFLARE_WORKERS:
+        from cloudflare_runtime import load_cv_object
+
+        contents = load_cv_object(
+            request.environ["workers.env"],
+            candidato["curriculum_archivo"],
+        )
+        return send_file(
+            BytesIO(contents),
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name="curriculum.pdf",
+        )
     filename = Path(candidato["curriculum_archivo"]).name
     cv_path = CV_UPLOAD_DIR / filename
     if not cv_path.is_file():
@@ -1432,6 +1507,19 @@ def postulante_cv():
     conn.close()
     if row is None:
         abort(404)
+    if Config.CLOUDFLARE_WORKERS:
+        from cloudflare_runtime import load_cv_object
+
+        contents = load_cv_object(
+            request.environ["workers.env"],
+            row["archivo"],
+        )
+        return send_file(
+            BytesIO(contents),
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name="curriculum.pdf",
+        )
     cv_path = CV_UPLOAD_DIR / Path(row["archivo"]).name
     if not cv_path.is_file():
         abort(404)
@@ -1749,7 +1837,8 @@ def internal_error(error):
     return render_template("errors/500.html"), 500
 
 
-init_db()
+if not Config.CLOUDFLARE_WORKERS:
+    init_db()
 
 
 if __name__ == "__main__":

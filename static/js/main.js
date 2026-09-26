@@ -4,7 +4,7 @@ if (integrationPanel) {
     const statusMessage = integrationPanel.querySelector("[data-integration-status]");
     const sectorList = integrationPanel.querySelector("[data-sector-list]");
 
-    fetch(integrationPanel.dataset.endpoint)
+    fetch(integrationPanel.dataset.endpoint || "/api/php/sectores")
         .then((response) => {
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}`);

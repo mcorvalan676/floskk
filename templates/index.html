@@ -22,7 +22,7 @@
     </div>
 </section>
 
-<section class="panel" id="php-integration" data-endpoint="http://127.0.0.1:8000/servicio.php" style="margin-top:28px;">
+<section class="panel" id="php-integration" data-endpoint="{{ url_for('php_sector_proxy') }}" style="margin-top:28px;">
     <h2>Actividad por sector</h2>
     <p class="muted" data-integration-status>Consultando el servicio complementario PHP...</p>
     <ul data-sector-list></ul>
