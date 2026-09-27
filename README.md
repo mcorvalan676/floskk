@@ -118,7 +118,7 @@ El Worker usa el entry point WSGI de Cloudflare para ejecutar Flask. Flask sigue
 
    Genera una clave aleatoria larga localmente; no la incluyas en comandos compartidos ni en archivos versionados.
 
-7. En Windows, usa el script de Wrangler para mantener los entornos virtuales fuera del escaneo de módulos Python. Sincroniza dependencias, aparta temporalmente los entornos locales ignorados mientras corre Wrangler y los restaura al terminar:
+7. Configura el Worker conectado a GitHub para que **Build command** esté vacío y **Deploy command** sea `python scripts/wrangler_build.py floskk`. El script sincroniza las dependencias de Python Workers, aparta temporalmente `.venv` y `.venv-workers` para que Wrangler no los incluya como módulos Python y los restaura al terminar. En Windows, usa el script PowerShell equivalente:
 
    ```powershell
    .\scripts\wrangler.ps1 dry-run
@@ -126,7 +126,7 @@ El Worker usa el entry point WSGI de Cloudflare para ejecutar Flask. Flask sigue
    .\scripts\wrangler.ps1 deploy
    ```
 
-   `dev` requiere acceso a los bindings configurados. Para Hyperdrive local, define temporalmente `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` con una URL MySQL local; no guardes esa cadena en Git. El arranque tradicional `python app.py` y `python -m unittest` siguen usando la configuración local y `requirements-local.txt`. Pywrangler no admite un `requirements.txt` en el raíz del proyecto; las dependencias Worker están declaradas exclusivamente en `pyproject.toml`.
+   Para validar manualmente el comando de Cloudflare sin subir el Worker, ejecuta `python scripts/wrangler_build.py floskk --dry-run`. `dev` requiere acceso a los bindings configurados. Para Hyperdrive local, define temporalmente `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` con una URL MySQL local; no guardes esa cadena en Git. El arranque tradicional `python app.py` y `python -m unittest` siguen usando la configuración local y `requirements-local.txt`. Pywrangler no admite un `requirements.txt` en el raíz del proyecto; las dependencias Worker están declaradas exclusivamente en `pyproject.toml`.
 
 ### Variables y bindings de producción
 
