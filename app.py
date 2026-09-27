@@ -105,8 +105,40 @@ def get_db():
         user=Config.MYSQL_USER,
         password=Config.MYSQL_PASSWORD,
         database=Config.MYSQL_DATABASE,
+        ssl_ca=Config.MYSQL_SSL_CA,
+        ssl_verify_cert=True,
+        ssl_verify_identity=True,
     )
     return MySQLConnectionAdapter(connection)
+
+
+def save_cv_file(key, contents):
+    if Config.CLOUDFLARE_WORKERS:
+        from cloudflare_runtime import save_cv_object
+
+        save_cv_object(request.environ["workers.env"], key, contents)
+    elif Config.CV_STORAGE == "r2":
+        from r2_storage import save_cv_object
+
+        save_cv_object(key, contents)
+    else:
+        CV_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        (CV_UPLOAD_DIR / Path(key).name).write_bytes(contents)
+
+
+def load_cv_file(key):
+    if Config.CLOUDFLARE_WORKERS:
+        from cloudflare_runtime import load_cv_object
+
+        return load_cv_object(request.environ["workers.env"], key)
+    if Config.CV_STORAGE == "r2":
+        from r2_storage import load_cv_object
+
+        return load_cv_object(key)
+    cv_path = CV_UPLOAD_DIR / Path(key).name
+    if not cv_path.is_file():
+        abort(404)
+    return cv_path.read_bytes()
 
 
 def guardar_notificacion(cursor, usuario_id, mensaje):
@@ -636,6 +668,11 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/healthz")
+def health_check():
+    return {"status": "ok"}
+
+
 @app.route("/static/<path:filename>", endpoint="static")
 def static_assets(filename):
     if Config.CLOUDFLARE_WORKERS:
@@ -966,18 +1003,9 @@ def postulante_perfil():
             cv.stream.seek(0)
             saved_cv_name = f"{uuid.uuid4().hex}.pdf"
             cv_contents = cv.read()
-            if Config.CLOUDFLARE_WORKERS:
-                from cloudflare_runtime import save_cv_object
-
-                save_cv_object(
-                    request.environ["workers.env"],
-                    f"cv/{saved_cv_name}",
-                    cv_contents,
-                )
+            if Config.CLOUDFLARE_WORKERS or Config.CV_STORAGE == "r2":
                 saved_cv_name = f"cv/{saved_cv_name}"
-            else:
-                CV_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-                (CV_UPLOAD_DIR / saved_cv_name).write_bytes(cv_contents)
+            save_cv_file(saved_cv_name, cv_contents)
 
         if Config.USE_SQLITE:
             cur.execute(
@@ -1456,24 +1484,13 @@ def empresa_candidato_cv(postulacion_id):
     conn.close()
     if candidato is None or not candidato["curriculum_archivo"]:
         abort(404)
-    if Config.CLOUDFLARE_WORKERS:
-        from cloudflare_runtime import load_cv_object
-
-        contents = load_cv_object(
-            request.environ["workers.env"],
-            candidato["curriculum_archivo"],
-        )
-        return send_file(
-            BytesIO(contents),
-            mimetype="application/pdf",
-            as_attachment=True,
-            download_name="curriculum.pdf",
-        )
-    filename = Path(candidato["curriculum_archivo"]).name
-    cv_path = CV_UPLOAD_DIR / filename
-    if not cv_path.is_file():
-        abort(404)
-    return send_file(cv_path, as_attachment=True, download_name="curriculum.pdf")
+    contents = load_cv_file(candidato["curriculum_archivo"])
+    return send_file(
+        BytesIO(contents),
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name="curriculum.pdf",
+    )
 
 
 @app.route("/postulante/cv")
@@ -1489,23 +1506,13 @@ def postulante_cv():
     conn.close()
     if row is None:
         abort(404)
-    if Config.CLOUDFLARE_WORKERS:
-        from cloudflare_runtime import load_cv_object
-
-        contents = load_cv_object(
-            request.environ["workers.env"],
-            row["archivo"],
-        )
-        return send_file(
-            BytesIO(contents),
-            mimetype="application/pdf",
-            as_attachment=True,
-            download_name="curriculum.pdf",
-        )
-    cv_path = CV_UPLOAD_DIR / Path(row["archivo"]).name
-    if not cv_path.is_file():
-        abort(404)
-    return send_file(cv_path, as_attachment=True, download_name="curriculum.pdf")
+    contents = load_cv_file(row["archivo"])
+    return send_file(
+        BytesIO(contents),
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name="curriculum.pdf",
+    )
 
 
 @app.route("/postulante/notificaciones")

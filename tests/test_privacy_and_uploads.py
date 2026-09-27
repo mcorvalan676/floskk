@@ -42,6 +42,12 @@ class PrivacyAndUploadsTest(unittest.TestCase):
         self.assertNotIn("{% endblock", page)
         self.assertNotIn("{{ url_for", page)
 
+    def test_health_check_does_not_require_database_access(self):
+        response = self.client.get("/healthz")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {"status": "ok"})
+
     def test_static_assets_are_served_with_content_types(self):
         css = self.client.get("/static/css/style.css")
         javascript = self.client.get("/static/js/main.js")
