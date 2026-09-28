@@ -50,7 +50,10 @@ class PrivacyAndUploadsTest(unittest.TestCase):
         self.assertEqual(response.get_json(), {"status": "ok"})
 
     def test_cloudflare_without_hyperdrive_renders_presentation_only(self):
-        with patch.object(app_module.Config, "CLOUDFLARE_WORKERS", True):
+        with (
+            patch.object(app_module.Config, "CLOUDFLARE_WORKERS", True),
+            patch.dict(app_module.app.config, {"SECRET_KEY": None}),
+        ):
             response = self.client.get(
                 "/",
                 environ_overrides={"workers.env": SimpleNamespace()},

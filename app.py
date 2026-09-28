@@ -33,7 +33,11 @@ def is_cloudflare_limited_mode():
     if not Config.CLOUDFLARE_WORKERS:
         return False
     worker_env = request.environ.get("workers.env")
-    return worker_env is None or getattr(worker_env, "HYPERDRIVE", None) is None
+    return (
+        worker_env is None
+        or not getattr(worker_env, "SECRET_KEY", None)
+        or getattr(worker_env, "HYPERDRIVE", None) is None
+    )
 
 
 @app.before_request

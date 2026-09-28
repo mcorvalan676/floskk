@@ -130,9 +130,7 @@ class CloudflareEnvironmentMiddleware:
     def __call__(self, environ, start_response):
         worker_env = environ.get("workers.env")
         secret_key = getattr(worker_env, "SECRET_KEY", None)
-        if not secret_key:
-            raise RuntimeError("The Cloudflare SECRET_KEY binding is required.")
         from app import app
 
-        app.secret_key = secret_key
+        app.secret_key = secret_key or None
         return self.wsgi_app(environ, start_response)
