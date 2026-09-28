@@ -11,20 +11,5 @@
     "directory": ".",
     "binding": "ASSETS",
     "run_worker_first": true
-  },
-  "hyperdrive": [
-    {
-      "binding": "HYPERDRIVE",
-      "id": "REPLACE_WITH_HYPERDRIVE_ID"
-    }
-  ],
-  "r2_buckets": [
-    {
-      "binding": "CV_BUCKET",
-      "bucket_name": "conectatalento-cv"
-    }
-  ],
-  "vars": {
-    "PHP_SERVICE_URL": "https://REPLACE_WITH_PHP_SERVICE_HOST/servicio.php"
   }
 }

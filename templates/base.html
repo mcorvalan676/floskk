@@ -11,7 +11,9 @@
     <a class="logo" href="{{ url_for('index') }}">Conecta<span>Talento</span></a>
     <nav>
         <a href="{{ url_for('index') }}">Inicio</a>
-        {% if session.get('rol') == 'POSTULANTE' %}
+        {% if cloudflare_limited_mode %}
+            <span class="muted">Vista de presentación</span>
+        {% elif session.get('rol') == 'POSTULANTE' %}
             <a href="{{ url_for('ofertas') }}">Ofertas</a>
             <a href="{{ url_for('postulante_dashboard') }}">Mi panel</a>
         {% elif session.get('rol') == 'EMPRESA' %}
@@ -22,7 +24,7 @@
         {% endif %}
         {% if session.get('usuario_id') %}
             <a href="{{ url_for('logout') }}">Cerrar sesión</a>
-        {% else %}
+        {% elif not cloudflare_limited_mode %}
             <a href="{{ url_for('login') }}">Iniciar sesión</a>
             <a class="nav-btn" href="{{ url_for('register') }}">Registrarse</a>
         {% endif %}
@@ -30,6 +32,9 @@
 </header>
 
 <main class="container">
+{% if cloudflare_limited_mode %}
+    <div class="alert">Modo de presentación: las funciones que necesitan la base de datos están deshabilitadas.</div>
+{% endif %}
 {% with messages = get_flashed_messages(with_categories=true) %}
     {% for category, message in messages %}
         <div class="alert {{ category }}">{{ message }}</div>

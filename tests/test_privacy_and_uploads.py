@@ -3,6 +3,7 @@ import unittest
 import uuid
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import app as app_module
@@ -47,6 +48,24 @@ class PrivacyAndUploadsTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json(), {"status": "ok"})
+
+    def test_cloudflare_without_hyperdrive_renders_presentation_only(self):
+        with patch.object(app_module.Config, "CLOUDFLARE_WORKERS", True):
+            response = self.client.get(
+                "/",
+                environ_overrides={"workers.env": SimpleNamespace()},
+            )
+            restricted_response = self.client.get(
+                "/login",
+                environ_overrides={"workers.env": SimpleNamespace()},
+            )
+
+        page = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Modo de presentación", page)
+        self.assertNotIn("Buscar oportunidades", page)
+        self.assertEqual(restricted_response.status_code, 503)
+        self.assertIn("base de datos", restricted_response.get_data(as_text=True))
 
     def test_static_assets_are_served_with_content_types(self):
         css = self.client.get("/static/css/style.css")

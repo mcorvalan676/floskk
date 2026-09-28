@@ -6,10 +6,12 @@
         <span class="eyebrow">RECLUTAMIENTO Y SELECCIÓN</span>
         <h1>Conectamos talento con oportunidades.</h1>
         <p>Una plataforma pensada para hacer que la contratación sea más ordenada, clara y eficiente.</p>
+        {% if not cloudflare_limited_mode %}
         <div class="actions">
             <a class="btn primary" href="{{ url_for('ofertas') }}">Buscar oportunidades</a>
             <a class="btn secondary" href="{{ url_for('register') }}">Soy empresa</a>
         </div>
+        {% endif %}
     </div>
 </section>
 
@@ -22,9 +24,11 @@
     </div>
 </section>
 
+{% if not cloudflare_limited_mode %}
 <section class="panel" id="php-integration" data-endpoint="{{ url_for('php_sector_proxy') }}" style="margin-top:28px;">
     <h2>Actividad por sector</h2>
     <p class="muted" data-integration-status>Consultando el servicio complementario PHP...</p>
     <ul data-sector-list></ul>
 </section>
+{% endif %}
 {% endblock %}

@@ -29,6 +29,34 @@ BASE_DIR = Path(__file__).resolve().parent
 CV_UPLOAD_DIR = BASE_DIR / "uploads" / "cv"
 
 
+def is_cloudflare_limited_mode():
+    if not Config.CLOUDFLARE_WORKERS:
+        return False
+    worker_env = request.environ.get("workers.env")
+    return worker_env is None or getattr(worker_env, "HYPERDRIVE", None) is None
+
+
+@app.before_request
+def limit_routes_without_database():
+    if (
+        is_cloudflare_limited_mode()
+        and request.endpoint is not None
+        and request.endpoint not in {"index", "health_check", "static_assets"}
+    ):
+        return Response(
+            "La vista de presentación está disponible, pero esta función requiere "
+            "una conexión a la base de datos que no está configurada.",
+            status=503,
+            mimetype="text/plain",
+        )
+    return None
+
+
+@app.context_processor
+def add_deployment_mode_to_templates():
+    return {"cloudflare_limited_mode": is_cloudflare_limited_mode()}
+
+
 class MySQLCursorAdapter:
     def __init__(self, cursor):
         self._cursor = cursor
