@@ -53,9 +53,25 @@ class PrivacyAndUploadsTest(unittest.TestCase):
         with (
             patch.object(app_module.Config, "CLOUDFLARE_WORKERS", True),
             patch.dict(app_module.app.config, {"SECRET_KEY": None}),
+            patch.dict(
+                "sys.modules",
+                {
+                    "cloudflare_runtime": SimpleNamespace(
+                        get_worker_asset=lambda worker_env, path: SimpleNamespace(
+                            status=200,
+                            headers={"Content-Type": "text/css"},
+                            body=b"body { color: black; }",
+                        )
+                    )
+                },
+            ),
         ):
             response = self.client.get(
                 "/",
+                environ_overrides={"workers.env": SimpleNamespace()},
+            )
+            static_response = self.client.get(
+                "/static/css/style.css",
                 environ_overrides={"workers.env": SimpleNamespace()},
             )
             restricted_response = self.client.get(
@@ -67,6 +83,8 @@ class PrivacyAndUploadsTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Modo de presentación", page)
         self.assertNotIn("Buscar oportunidades", page)
+        self.assertEqual(static_response.status_code, 200)
+        self.assertEqual(static_response.get_data(), b"body { color: black; }")
         self.assertEqual(restricted_response.status_code, 503)
         self.assertIn("base de datos", restricted_response.get_data(as_text=True))
 

@@ -45,7 +45,7 @@ def limit_routes_without_database():
     if (
         is_cloudflare_limited_mode()
         and request.endpoint is not None
-        and request.endpoint not in {"index", "health_check", "static_assets"}
+        and request.endpoint not in {"index", "health_check", "static"}
     ):
         return Response(
             "La vista de presentación está disponible, pero esta función requiere "
