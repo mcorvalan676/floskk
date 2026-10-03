@@ -1,3 +1,5 @@
+import hmac
+import secrets
 import uuid
 from datetime import date, time
 from io import BytesIO
@@ -20,9 +22,31 @@ from models.postulacion import Postulacion
 from models.proceso_seleccion import ProcesoSeleccion
 from services.compatibilidad import calcular_compatibilidad
 
+PASSWORD_HASH_METHOD = "pbkdf2:sha256:600000"
+
+
+def hash_password(password):
+    if Config.CLOUDFLARE_WORKERS:
+        from cloudflare_runtime import hash_password_pbkdf2
+
+        return hash_password_pbkdf2(password)
+    return generate_password_hash(password, method=PASSWORD_HASH_METHOD)
+
+
+def verify_password(password_hash, password):
+    if Config.CLOUDFLARE_WORKERS and password_hash.startswith("pbkdf2-chain:"):
+        from cloudflare_runtime import verify_password_pbkdf2
+
+        return verify_password_pbkdf2(password_hash, password)
+    return check_password_hash(password_hash, password)
+
+
 app = Flask(__name__, static_folder=None)
 app.config.from_object(Config)
-app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
+MAX_CV_FILE_SIZE = 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = (
+    1250 * 1024 if Config.CLOUDFLARE_WORKERS else 10 * 1024 * 1024
+)
 app.config["JSON_AS_ASCII"] = False
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -36,20 +60,33 @@ def is_cloudflare_limited_mode():
     return (
         worker_env is None
         or not getattr(worker_env, "SECRET_KEY", None)
-        or getattr(worker_env, "HYPERDRIVE", None) is None
+        or getattr(worker_env, "DB", None) is None
     )
 
 
 @app.before_request
 def limit_routes_without_database():
     if (
+        Config.CSRF_ENABLED
+        and request.method in {"POST", "PUT", "PATCH", "DELETE"}
+    ):
+        expected = session.get("_csrf_token")
+        supplied = request.form.get("csrf_token", "")
+        if (
+            not isinstance(expected, str)
+            or not isinstance(supplied, str)
+            or not hmac.compare_digest(expected, supplied)
+        ):
+            abort(400)
+
+    if (
         is_cloudflare_limited_mode()
         and request.endpoint is not None
         and request.endpoint not in {"index", "health_check", "static"}
     ):
         return Response(
-            "La vista de presentación está disponible, pero esta función requiere "
-            "una conexión a la base de datos que no está configurada.",
+            "Esta función requiere que Cloudflare D1 y SECRET_KEY estén "
+            "configurados para la aplicación.",
             status=503,
             mimetype="text/plain",
         )
@@ -58,7 +95,17 @@ def limit_routes_without_database():
 
 @app.context_processor
 def add_deployment_mode_to_templates():
-    return {"cloudflare_limited_mode": is_cloudflare_limited_mode()}
+    csrf_token = ""
+    if app.secret_key:
+        csrf_token = session.get("_csrf_token")
+        if not csrf_token:
+            csrf_token = secrets.token_urlsafe(32)
+            session["_csrf_token"] = csrf_token
+    return {
+        "cloudflare_limited_mode": is_cloudflare_limited_mode(),
+        "max_cv_upload_mb": 1 if Config.CLOUDFLARE_WORKERS else 10,
+        "csrf_token": csrf_token,
+    }
 
 
 class MySQLCursorAdapter:
@@ -119,9 +166,9 @@ class MySQLConnectionAdapter:
 
 def get_db():
     if Config.CLOUDFLARE_WORKERS:
-        from cloudflare_runtime import connect_hyperdrive
+        from cloudflare_runtime import connect_d1
 
-        return MySQLConnectionAdapter(connect_hyperdrive(request.environ["workers.env"]))
+        return connect_d1(request.environ["workers.env"])
 
     if Config.USE_SQLITE:
         Path(Config.SQLITE_DB_PATH).parent.mkdir(parents=True, exist_ok=True)
@@ -146,9 +193,9 @@ def get_db():
 
 def save_cv_file(key, contents):
     if Config.CLOUDFLARE_WORKERS:
-        from cloudflare_runtime import save_cv_object
+        from cloudflare_runtime import save_cv_d1
 
-        save_cv_object(request.environ["workers.env"], key, contents)
+        save_cv_d1(request.environ["workers.env"], key, contents)
     elif Config.CV_STORAGE == "r2":
         from r2_storage import save_cv_object
 
@@ -160,9 +207,9 @@ def save_cv_file(key, contents):
 
 def load_cv_file(key):
     if Config.CLOUDFLARE_WORKERS:
-        from cloudflare_runtime import load_cv_object
+        from cloudflare_runtime import load_cv_d1
 
-        return load_cv_object(request.environ["workers.env"], key)
+        return load_cv_d1(request.environ["workers.env"], key)
     if Config.CV_STORAGE == "r2":
         from r2_storage import load_cv_object
 
@@ -353,6 +400,19 @@ def init_db():
         )
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS ofertas_favoritas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                postulante_id INTEGER NOT NULL,
+                oferta_id INTEGER NOT NULL,
+                creado_en TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(postulante_id, oferta_id),
+                FOREIGN KEY (postulante_id) REFERENCES postulantes(id) ON DELETE CASCADE,
+                FOREIGN KEY (oferta_id) REFERENCES ofertas(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS postulaciones (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 oferta_id INTEGER NOT NULL,
@@ -419,12 +479,30 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 postulacion_id INTEGER NOT NULL,
                 estado TEXT NOT NULL,
+                estado_anterior TEXT,
                 observacion TEXT,
                 fecha TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (postulacion_id) REFERENCES postulaciones(id) ON DELETE CASCADE
+                usuario_id INTEGER,
+                rol_actor TEXT CHECK (rol_actor IN ('POSTULANTE', 'EMPRESA', 'ADMIN')),
+                FOREIGN KEY (postulacion_id) REFERENCES postulaciones(id) ON DELETE CASCADE,
+                FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE SET NULL
             )
             """
         )
+        seguimiento_columns = {
+            row["name"] for row in cur.execute("PRAGMA table_info(seguimiento)")
+        }
+        if "estado_anterior" not in seguimiento_columns:
+            cur.execute("ALTER TABLE seguimiento ADD COLUMN estado_anterior TEXT")
+        if "usuario_id" not in seguimiento_columns:
+            cur.execute(
+                """
+                ALTER TABLE seguimiento ADD COLUMN usuario_id INTEGER
+                    REFERENCES usuarios(id) ON DELETE SET NULL
+                """
+            )
+        if "rol_actor" not in seguimiento_columns:
+            cur.execute("ALTER TABLE seguimiento ADD COLUMN rol_actor TEXT")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS administradores (
@@ -528,6 +606,19 @@ def init_db():
         )
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS ofertas_favoritas (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                postulante_id INT NOT NULL,
+                oferta_id INT NOT NULL,
+                creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY favorita_unica (postulante_id, oferta_id),
+                FOREIGN KEY (postulante_id) REFERENCES postulantes(id) ON DELETE CASCADE,
+                FOREIGN KEY (oferta_id) REFERENCES ofertas(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS postulaciones (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 oferta_id INT NOT NULL,
@@ -594,9 +685,13 @@ def init_db():
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 postulacion_id INT NOT NULL,
                 estado VARCHAR(50) NOT NULL,
+                estado_anterior VARCHAR(50),
                 observacion TEXT,
                 fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (postulacion_id) REFERENCES postulaciones(id) ON DELETE CASCADE
+                usuario_id INT,
+                rol_actor ENUM('POSTULANTE','EMPRESA','ADMIN'),
+                FOREIGN KEY (postulacion_id) REFERENCES postulaciones(id) ON DELETE CASCADE,
+                FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE SET NULL
             )
             """
         )
@@ -667,7 +762,7 @@ def create_admin_command():
             raise SystemExit("Ya existe una cuenta con ese correo.")
         cur.execute(
             f"INSERT INTO usuarios (nombre, apellido, correo, password_hash, rol, activo) VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, 'ADMIN', 1)",
-            (nombre, apellido, correo, generate_password_hash(password)),
+            (nombre, apellido, correo, hash_password(password)),
         )
         cur.execute(
             f"INSERT INTO administradores (usuario_id) VALUES ({placeholder})",
@@ -722,10 +817,21 @@ def static_assets(filename):
 @app.route("/api/php/sectores")
 def php_sector_proxy():
     if Config.CLOUDFLARE_WORKERS:
-        from cloudflare_runtime import fetch_php_service
-
-        payload, status = fetch_php_service(request.environ["workers.env"])
-        return jsonify(payload), status
+        conn = get_db()
+        cursor = conn.cursor()
+        sectors = cursor.execute(
+            """
+            SELECT COALESCE(e.sector, 'Sin sector') AS sector, COUNT(o.id) AS ofertas_activas
+            FROM ofertas o
+            JOIN empresas e ON e.id = o.empresa_id
+            WHERE o.estado = 'ACTIVA'
+            GROUP BY e.sector
+            ORDER BY ofertas_activas DESC
+            """
+        ).fetchall()
+        cursor.close()
+        conn.close()
+        return jsonify(success=True, servicio="ConectaTalento", sectores=sectors)
 
     try:
         with urlopen(Config.PHP_SERVICE_URL, timeout=3) as response:
@@ -763,44 +869,79 @@ def register():
         conn = get_db()
         cur = conn.cursor()
         try:
-            if Config.USE_SQLITE:
-                cur.execute(
-                    "INSERT INTO usuarios (nombre, apellido, correo, password_hash, rol, activo) VALUES (?, ?, ?, ?, ?, 1)",
-                    (nombre, apellido, correo, generate_password_hash(password), rol),
-                )
+            if Config.CLOUDFLARE_WORKERS:
+                statements = [
+                    (
+                        """
+                        INSERT INTO usuarios
+                            (nombre, apellido, correo, password_hash, rol, activo)
+                        VALUES (?, ?, ?, ?, ?, 1)
+                        """,
+                        (nombre, apellido, correo, hash_password(password), rol),
+                    ),
+                ]
+                if rol == "POSTULANTE":
+                    statements.append(
+                        (
+                            """
+                            INSERT INTO postulantes
+                                (usuario_id, ciudad, region, habilidades)
+                            SELECT id, ?, ?, ? FROM usuarios WHERE correo = ?
+                            """,
+                            ("Sin información", "Sin información", "", correo),
+                        )
+                    )
+                else:
+                    statements.append(
+                        (
+                            """
+                            INSERT INTO empresas (usuario_id, nombre_empresa)
+                            SELECT id, ? FROM usuarios WHERE correo = ?
+                            """,
+                            (f"{nombre} {apellido}", correo),
+                        )
+                    )
+                conn.execute_batch(statements)
             else:
-                cur.execute(
-                    "INSERT INTO usuarios (nombre, apellido, correo, password_hash, rol, activo) VALUES (%s, %s, %s, %s, %s, TRUE)",
-                    (nombre, apellido, correo, generate_password_hash(password), rol),
-                )
+                if Config.USE_SQLITE:
+                    cur.execute(
+                        "INSERT INTO usuarios (nombre, apellido, correo, password_hash, rol, activo) VALUES (?, ?, ?, ?, ?, 1)",
+                        (nombre, apellido, correo, hash_password(password), rol),
+                    )
+                else:
+                    cur.execute(
+                        "INSERT INTO usuarios (nombre, apellido, correo, password_hash, rol, activo) VALUES (%s, %s, %s, %s, %s, TRUE)",
+                        (nombre, apellido, correo, hash_password(password), rol),
+                    )
 
-            user_id = cur.lastrowid
-            if rol == "POSTULANTE":
-                if Config.USE_SQLITE:
-                    cur.execute(
-                        "INSERT INTO postulantes (usuario_id, ciudad, region, habilidades) VALUES (?, ?, ?, ?)",
-                        (user_id, "Sin información", "Sin información", ""),
-                    )
+                user_id = cur.lastrowid
+                if rol == "POSTULANTE":
+                    if Config.USE_SQLITE:
+                        cur.execute(
+                            "INSERT INTO postulantes (usuario_id, ciudad, region, habilidades) VALUES (?, ?, ?, ?)",
+                            (user_id, "Sin información", "Sin información", ""),
+                        )
+                    else:
+                        cur.execute(
+                            "INSERT INTO postulantes (usuario_id, ciudad, region, habilidades) VALUES (%s, %s, %s, %s)",
+                            (user_id, "Sin información", "Sin información", ""),
+                        )
                 else:
-                    cur.execute(
-                        "INSERT INTO postulantes (usuario_id, ciudad, region, habilidades) VALUES (%s, %s, %s, %s)",
-                        (user_id, "Sin información", "Sin información", ""),
-                    )
-            else:
-                if Config.USE_SQLITE:
-                    cur.execute(
-                        "INSERT INTO empresas (usuario_id, nombre_empresa) VALUES (?, ?)",
-                        (user_id, f"{nombre} {apellido}"),
-                    )
-                else:
-                    cur.execute(
-                        "INSERT INTO empresas (usuario_id, nombre_empresa) VALUES (%s, %s)",
-                        (user_id, f"{nombre} {apellido}"),
-                    )
+                    if Config.USE_SQLITE:
+                        cur.execute(
+                            "INSERT INTO empresas (usuario_id, nombre_empresa) VALUES (?, ?)",
+                            (user_id, f"{nombre} {apellido}"),
+                        )
+                    else:
+                        cur.execute(
+                            "INSERT INTO empresas (usuario_id, nombre_empresa) VALUES (%s, %s)",
+                            (user_id, f"{nombre} {apellido}"),
+                        )
             conn.commit()
             flash("Cuenta creada correctamente.", "success")
             return redirect(url_for("login"))
         except Exception:
+            app.logger.exception("Could not register account.")
             conn.rollback()
             flash("No se pudo crear la cuenta. Intenta nuevamente.", "error")
         finally:
@@ -810,6 +951,82 @@ def register():
     return render_template("register.html")
 
 
+@app.route("/setup-admin", methods=["GET", "POST"])
+def setup_admin():
+    if not Config.CLOUDFLARE_WORKERS:
+        abort(404)
+
+    worker_env = request.environ["workers.env"]
+    setup_token = getattr(worker_env, "INITIAL_ADMIN_TOKEN", None)
+    if not setup_token:
+        abort(404)
+
+    conn = get_db()
+    cur = conn.cursor()
+    existing_admin = cur.execute(
+        "SELECT id FROM usuarios WHERE rol = 'ADMIN' LIMIT 1"
+    ).fetchone()
+    cur.close()
+    conn.close()
+    if existing_admin:
+        abort(404)
+
+    if request.method == "POST":
+        supplied_token = request.form.get("token", "")
+        if not hmac.compare_digest(str(supplied_token), str(setup_token)):
+            abort(403)
+
+        nombre = request.form.get("nombre", "").strip()
+        apellido = request.form.get("apellido", "").strip()
+        correo = request.form.get("correo", "").strip()
+        password = request.form.get("password", "")
+        if not nombre or not apellido or not correo or len(password) < 12:
+            flash(
+                "Completa todos los campos y usa una contraseña de al menos 12 caracteres.",
+                "error",
+            )
+            return render_template("setup_admin.html")
+
+        conn = get_db()
+        cur = conn.cursor()
+        if cur.execute(
+            "SELECT id FROM usuarios WHERE correo = ?", (correo,)
+        ).fetchone():
+            cur.close()
+            conn.close()
+            flash("El correo ya se encuentra registrado.", "error")
+            return render_template("setup_admin.html")
+
+        conn.execute_batch(
+            [
+                (
+                    """
+                    INSERT INTO usuarios
+                        (nombre, apellido, correo, password_hash, rol, activo)
+                    VALUES (?, ?, ?, ?, 'ADMIN', 1)
+                    """,
+                    (nombre, apellido, correo, hash_password(password)),
+                ),
+                (
+                    """
+                    INSERT INTO administradores (usuario_id)
+                    SELECT id FROM usuarios WHERE correo = ?
+                    """,
+                    (correo,),
+                ),
+            ]
+        )
+        cur.close()
+        conn.close()
+        flash(
+            "Cuenta administradora creada. Elimina INITIAL_ADMIN_TOKEN de los secretos del Worker.",
+            "success",
+        )
+        return redirect(url_for("login"))
+
+    return render_template("setup_admin.html")
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
@@ -817,7 +1034,8 @@ def login():
         password = request.form["password"]
 
         user = get_user_by_email(correo)
-        if user and check_password_hash(user["password_hash"], password):
+        if user and verify_password(user["password_hash"], password):
+            session.clear()
             session["usuario_id"] = user["id"]
             session["nombre"] = user["nombre"]
             session["rol"] = user["rol"]
@@ -859,6 +1077,14 @@ def postulante_dashboard():
 
     postulaciones = []
     historiales = {}
+    stats = {
+        "ofertas_disponibles": 0,
+        "en_revision": 0,
+        "entrevistas_proximas": 0,
+    }
+    perfil_completitud = 0
+    curriculum_cargado = False
+    proxima_entrevista = None
     if postulante is not None:
         if Config.USE_SQLITE:
             postulaciones = cur.execute(
@@ -887,9 +1113,12 @@ def postulante_dashboard():
         placeholder = "?" if Config.USE_SQLITE else "%s"
         events = cur.execute(
             f"""
-            SELECT s.postulacion_id, s.estado, s.observacion, s.fecha
+            SELECT s.postulacion_id, s.estado_anterior, s.estado,
+                   s.observacion, s.fecha, s.rol_actor,
+                   actor.nombre AS actor_nombre, actor.apellido AS actor_apellido
             FROM seguimiento s
             JOIN postulaciones p ON p.id = s.postulacion_id
+            LEFT JOIN usuarios actor ON actor.id = s.usuario_id
             WHERE p.postulante_id = {placeholder}
             ORDER BY s.fecha, s.id
             """,
@@ -898,11 +1127,78 @@ def postulante_dashboard():
         for event in events:
             historiales.setdefault(event["postulacion_id"], []).append(event)
 
+        placeholder = "?" if Config.USE_SQLITE else "%s"
+        stats["ofertas_disponibles"] = cur.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM ofertas
+            WHERE estado = 'ACTIVA'
+              AND (fecha_cierre IS NULL OR fecha_cierre >= CURRENT_DATE)
+            """
+        ).fetchone()["total"]
+        stats["en_revision"] = sum(
+            1 for item in postulaciones
+            if item["estado"] in {"REVISION", "PRESELECCIONADO"}
+        )
+        stats["entrevistas_proximas"] = cur.execute(
+            f"""
+            SELECT COUNT(*) AS total
+            FROM entrevistas i
+            JOIN postulaciones p ON p.id = i.postulacion_id
+            WHERE p.postulante_id = {placeholder}
+              AND i.estado = 'PENDIENTE'
+              AND (
+                  i.fecha > CURRENT_DATE
+                  OR (i.fecha = CURRENT_DATE AND i.hora >= CURRENT_TIME)
+              )
+            """,
+            (postulante["id"],),
+        ).fetchone()["total"]
+        proxima_entrevista = cur.execute(
+            f"""
+            SELECT i.fecha, i.hora, i.modalidad, i.lugar, o.titulo,
+                   e.nombre_empresa
+            FROM entrevistas i
+            JOIN postulaciones p ON p.id = i.postulacion_id
+            JOIN ofertas o ON o.id = p.oferta_id
+            JOIN empresas e ON e.id = o.empresa_id
+            WHERE p.postulante_id = {placeholder}
+              AND i.estado = 'PENDIENTE'
+              AND (
+                  i.fecha > CURRENT_DATE
+                  OR (i.fecha = CURRENT_DATE AND i.hora >= CURRENT_TIME)
+              )
+            ORDER BY i.fecha, i.hora, i.id
+            LIMIT 1
+            """,
+            (postulante["id"],),
+        ).fetchone()
+        curriculum_cargado = cur.execute(
+            f"SELECT id FROM curriculums WHERE postulante_id = {placeholder}",
+            (postulante["id"],),
+        ).fetchone() is not None
+        profile_values = (
+            postulante["telefono"],
+            postulante["descripcion"],
+            postulante["objetivo_profesional"],
+            postulante["habilidades"],
+            postulante["experiencia"],
+            postulante["educacion"],
+        )
+        completed_fields = sum(
+            1 for value in profile_values if value and value.strip()
+        ) + int(curriculum_cargado)
+        perfil_completitud = round(completed_fields * 100 / 7)
+
     conn.close()
     return render_template(
         "postulante/dashboard.html",
         postulaciones=postulaciones,
         historiales=historiales,
+        stats=stats,
+        perfil_completitud=perfil_completitud,
+        curriculum_cargado=curriculum_cargado,
+        proxima_entrevista=proxima_entrevista,
     )
 
 
@@ -1033,8 +1329,12 @@ def postulante_perfil():
                 flash("El archivo no parece ser un PDF válido.", "error")
                 return redirect(url_for("postulante_perfil"))
             cv.stream.seek(0)
-            saved_cv_name = f"{uuid.uuid4().hex}.pdf"
             cv_contents = cv.read()
+            if Config.CLOUDFLARE_WORKERS and len(cv_contents) > MAX_CV_FILE_SIZE:
+                conn.close()
+                flash("El currículum en Cloudflare no puede superar 1 MB.", "error")
+                return redirect(url_for("postulante_perfil"))
+            saved_cv_name = f"{uuid.uuid4().hex}.pdf"
             if Config.CLOUDFLARE_WORKERS or Config.CV_STORAGE == "r2":
                 saved_cv_name = f"cv/{saved_cv_name}"
             save_cv_file(saved_cv_name, cv_contents)
@@ -1176,9 +1476,29 @@ def ofertas():
         """,
         tuple(params),
     ).fetchall()
+    ofertas_favoritas = set()
+    if session.get("rol") == "POSTULANTE":
+        user_placeholder = "?" if Config.USE_SQLITE else "%s"
+        ofertas_favoritas = {
+            row["oferta_id"]
+            for row in cur.execute(
+                f"""
+                SELECT f.oferta_id
+                FROM ofertas_favoritas f
+                JOIN postulantes p ON p.id = f.postulante_id
+                WHERE p.usuario_id = {user_placeholder}
+                """,
+                (session["usuario_id"],),
+            ).fetchall()
+        }
     conn.close()
 
-    return render_template("ofertas.html", ofertas=rows, filtros=filtros)
+    return render_template(
+        "ofertas.html",
+        ofertas=rows,
+        filtros=filtros,
+        ofertas_favoritas=ofertas_favoritas,
+    )
 
 
 @app.route("/ofertas/<int:oferta_id>")
@@ -1208,21 +1528,133 @@ def oferta_detalle(oferta_id):
             postulante = cur.execute("SELECT * FROM postulantes WHERE usuario_id = ?", (user_id,)).fetchone()
         else:
             postulante = cur.execute("SELECT * FROM postulantes WHERE usuario_id = %s", (user_id,)).fetchone()
-        conn.close()
         if postulante is not None:
             habilidades_postulante = []
-            if isinstance(postulante, sqlite3.Row):
-                habilidades_postulante = (postulante["habilidades"] or "").split(",")
-            else:
-                habilidades_postulante = (postulante["habilidades"] or "").split(",")
+            habilidades_postulante = (postulante["habilidades"] or "").split(",")
             oferta_habilidades = (oferta["habilidades"] or "").split(",")
             compatibilidad = calcular_compatibilidad(habilidades_postulante, oferta_habilidades)
+            placeholder = "?" if Config.USE_SQLITE else "%s"
+            oferta_guardada = cur.execute(
+                f"""
+                SELECT id FROM ofertas_favoritas
+                WHERE postulante_id = {placeholder} AND oferta_id = {placeholder}
+                """,
+                (postulante["id"], oferta_id),
+            ).fetchone() is not None
         else:
             compatibilidad = 0
+            oferta_guardada = False
+        conn.close()
     else:
         compatibilidad = None
+        oferta_guardada = False
 
-    return render_template("oferta_detalle.html", oferta=oferta, compatibilidad=compatibilidad)
+    return render_template(
+        "oferta_detalle.html",
+        oferta=oferta,
+        compatibilidad=compatibilidad,
+        oferta_guardada=oferta_guardada,
+    )
+
+
+@app.route("/postulante/favoritos")
+def postulante_favoritos():
+    if session.get("rol") != "POSTULANTE":
+        return redirect(url_for("login"))
+
+    placeholder = "?" if Config.USE_SQLITE else "%s"
+    conn = get_db()
+    favorites = conn.cursor().execute(
+        f"""
+        SELECT o.id, o.titulo, o.ubicacion, o.estado, o.fecha_cierre,
+               e.nombre_empresa, f.creado_en,
+               CASE
+                   WHEN o.estado = 'ACTIVA'
+                    AND (o.fecha_cierre IS NULL OR o.fecha_cierre >= CURRENT_DATE)
+                   THEN 1 ELSE 0
+               END AS disponible
+        FROM ofertas_favoritas f
+        JOIN postulantes p ON p.id = f.postulante_id
+        JOIN ofertas o ON o.id = f.oferta_id
+        JOIN empresas e ON e.id = o.empresa_id
+        WHERE p.usuario_id = {placeholder}
+        ORDER BY f.id DESC
+        """,
+        (session["usuario_id"],),
+    ).fetchall()
+    conn.close()
+    return render_template("postulante/favoritos.html", ofertas=favorites)
+
+
+@app.route("/postulante/favoritos/<int:oferta_id>", methods=["POST"])
+def actualizar_favorito_oferta(oferta_id):
+    if session.get("rol") != "POSTULANTE":
+        return redirect(url_for("login"))
+
+    action = request.form.get("action", "guardar")
+    if action not in {"guardar", "quitar"}:
+        abort(400)
+
+    conn = get_db()
+    cur = conn.cursor()
+    placeholder = "?" if Config.USE_SQLITE else "%s"
+    if action == "quitar":
+        cur.execute(
+            f"""
+            DELETE FROM ofertas_favoritas
+            WHERE oferta_id = {placeholder}
+              AND postulante_id = (
+                  SELECT id FROM postulantes WHERE usuario_id = {placeholder}
+              )
+            """,
+            (oferta_id, session["usuario_id"]),
+        )
+        if cur.rowcount:
+            conn.commit()
+            flash("Oferta quitada de tus guardadas.", "success")
+        else:
+            flash("La oferta guardada no existe.", "error")
+    else:
+        if Config.USE_SQLITE or Config.CLOUDFLARE_WORKERS:
+            insert_sql = """
+                INSERT OR IGNORE INTO ofertas_favoritas (postulante_id, oferta_id)
+                SELECT p.id, o.id
+                FROM postulantes p
+                JOIN ofertas o ON o.id = ?
+                WHERE p.usuario_id = ?
+                  AND o.estado = 'ACTIVA'
+                  AND (o.fecha_cierre IS NULL OR o.fecha_cierre >= CURRENT_DATE)
+            """
+        else:
+            insert_sql = """
+                INSERT IGNORE INTO ofertas_favoritas (postulante_id, oferta_id)
+                SELECT p.id, o.id
+                FROM postulantes p
+                JOIN ofertas o ON o.id = %s
+                WHERE p.usuario_id = %s
+                  AND o.estado = 'ACTIVA'
+                  AND (o.fecha_cierre IS NULL OR o.fecha_cierre >= CURRENT_DATE)
+            """
+        cur.execute(insert_sql, (oferta_id, session["usuario_id"]))
+        saved = cur.execute(
+            f"""
+            SELECT f.id
+            FROM ofertas_favoritas f
+            JOIN postulantes p ON p.id = f.postulante_id
+            WHERE p.usuario_id = {placeholder} AND f.oferta_id = {placeholder}
+            """,
+            (session["usuario_id"], oferta_id),
+        ).fetchone()
+        if saved:
+            conn.commit()
+            flash("Oferta guardada en tus favoritos.", "success")
+        else:
+            flash("La oferta ya no está disponible.", "error")
+    cur.close()
+    conn.close()
+    if action == "quitar":
+        return redirect(url_for("postulante_favoritos"))
+    return redirect(url_for("oferta_detalle", oferta_id=oferta_id))
 
 
 @app.route("/postular/<int:oferta_id>", methods=["POST"])
@@ -1276,32 +1708,74 @@ def postular(oferta_id):
         conn.close()
         return redirect(url_for("ofertas"))
 
-    if Config.USE_SQLITE:
-        cur.execute(
-            "INSERT INTO postulaciones (oferta_id, postulante_id, estado) VALUES (?, ?, 'POSTULADO')",
-            (oferta_id, postulante["id"]),
+    if Config.CLOUDFLARE_WORKERS:
+        conn.execute_batch(
+            [
+                (
+                    "INSERT INTO postulaciones (oferta_id, postulante_id, estado) VALUES (?, ?, 'POSTULADO')",
+                    (oferta_id, postulante["id"]),
+                ),
+                (
+                    """
+                    INSERT INTO seguimiento
+                        (postulacion_id, estado, observacion, estado_anterior,
+                         usuario_id, rol_actor)
+                    SELECT id, 'POSTULADO', 'Postulación recibida', NULL, ?, ?
+                    FROM postulaciones
+                    WHERE oferta_id = ? AND postulante_id = ?
+                    """,
+                    (
+                        session["usuario_id"],
+                        session["rol"],
+                        oferta_id,
+                        postulante["id"],
+                    ),
+                ),
+                (
+                    """
+                    INSERT INTO notificaciones (usuario_id, mensaje, leida)
+                    SELECT e.usuario_id, ?, 0
+                    FROM empresas e
+                    JOIN ofertas o ON o.empresa_id = e.id
+                    WHERE o.id = ?
+                    """,
+                    (f"Nueva postulación recibida para {oferta['titulo']}.", oferta_id),
+                ),
+            ]
         )
     else:
+        if Config.USE_SQLITE:
+            cur.execute(
+                "INSERT INTO postulaciones (oferta_id, postulante_id, estado) VALUES (?, ?, 'POSTULADO')",
+                (oferta_id, postulante["id"]),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO postulaciones (oferta_id, postulante_id, estado) VALUES (%s, %s, 'POSTULADO')",
+                (oferta_id, postulante["id"]),
+            )
+        application_id = cur.lastrowid
+        placeholder = "?" if Config.USE_SQLITE else "%s"
         cur.execute(
-            "INSERT INTO postulaciones (oferta_id, postulante_id, estado) VALUES (%s, %s, 'POSTULADO')",
-            (oferta_id, postulante["id"]),
+            f"""
+            INSERT INTO seguimiento
+                (postulacion_id, estado, observacion, estado_anterior,
+                 usuario_id, rol_actor)
+            VALUES ({placeholder}, 'POSTULADO', 'Postulación recibida', NULL,
+                    {placeholder}, {placeholder})
+            """,
+            (application_id, session["usuario_id"], session["rol"]),
         )
-    application_id = cur.lastrowid
-    placeholder = "?" if Config.USE_SQLITE else "%s"
-    cur.execute(
-        f"INSERT INTO seguimiento (postulacion_id, estado, observacion) VALUES ({placeholder}, 'POSTULADO', 'Postulación recibida')",
-        (application_id,),
-    )
-    empresa_usuario = cur.execute(
-        f"SELECT e.usuario_id FROM empresas e JOIN ofertas o ON o.empresa_id = e.id WHERE o.id = {placeholder}",
-        (oferta_id,),
-    ).fetchone()
-    if empresa_usuario:
-        guardar_notificacion(
-            cur,
-            empresa_usuario["usuario_id"],
-            f"Nueva postulación recibida para {oferta['titulo']}.",
-        )
+        empresa_usuario = cur.execute(
+            f"SELECT e.usuario_id FROM empresas e JOIN ofertas o ON o.empresa_id = e.id WHERE o.id = {placeholder}",
+            (oferta_id,),
+        ).fetchone()
+        if empresa_usuario:
+            guardar_notificacion(
+                cur,
+                empresa_usuario["usuario_id"],
+                f"Nueva postulación recibida para {oferta['titulo']}.",
+            )
     conn.commit()
     conn.close()
     flash("Postulación registrada correctamente.", "success")
@@ -1571,6 +2045,31 @@ def postulante_notificaciones():
     return render_template("postulante/notificaciones.html", notificaciones=rows)
 
 
+@app.route("/postulante/notificaciones/<int:notificacion_id>/leer", methods=["POST"])
+def marcar_notificacion_leida(notificacion_id):
+    if session.get("rol") != "POSTULANTE":
+        return redirect(url_for("login"))
+
+    placeholder = "?" if Config.USE_SQLITE else "%s"
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        f"""
+        UPDATE notificaciones SET leida = 1
+        WHERE id = {placeholder} AND usuario_id = {placeholder}
+        """,
+        (notificacion_id, session["usuario_id"]),
+    )
+    if cur.rowcount == 0:
+        flash("La notificación no existe.", "error")
+    else:
+        conn.commit()
+        flash("Notificación marcada como leída.", "success")
+    cur.close()
+    conn.close()
+    return redirect(url_for("postulante_notificaciones"))
+
+
 @app.route("/empresa/postulaciones/<int:postulacion_id>/agendar_entrevista", methods=["POST"])
 def agendar_entrevista(postulacion_id):
     if session.get("rol") != "EMPRESA":
@@ -1608,7 +2107,53 @@ def agendar_entrevista(postulacion_id):
         flash("La postulación no existe.", "error")
         return redirect(url_for("empresa_candidatos"))
 
-    if Config.USE_SQLITE:
+    if Config.CLOUDFLARE_WORKERS:
+        observation = f"Entrevista agendada para {fecha} a las {hora} ({modalidad})."
+        conn.execute_batch(
+            [
+                (
+                    """
+                    INSERT INTO entrevistas
+                        (postulacion_id, fecha, hora, modalidad, lugar, estado)
+                    VALUES (?, ?, ?, ?, ?, 'PENDIENTE')
+                    """,
+                    (postulacion_id, fecha, hora, modalidad, lugar or "Por confirmar"),
+                ),
+                (
+                    "UPDATE postulaciones SET estado = 'ENTREVISTA' WHERE id = ?",
+                    (postulacion_id,),
+                ),
+                (
+                    """
+                    INSERT INTO seguimiento
+                        (postulacion_id, estado, observacion, estado_anterior,
+                         usuario_id, rol_actor)
+                    VALUES (?, 'ENTREVISTA', ?, ?, ?, ?)
+                    """,
+                    (
+                        postulacion_id,
+                        observation,
+                        postulacion["estado"],
+                        session["usuario_id"],
+                        session["rol"],
+                    ),
+                ),
+                (
+                    """
+                    INSERT INTO notificaciones (usuario_id, mensaje, leida)
+                    SELECT po.usuario_id, ?, 0
+                    FROM postulantes po
+                    JOIN postulaciones p ON p.postulante_id = po.id
+                    WHERE p.id = ?
+                    """,
+                    (
+                        f"Tu entrevista fue agendada para el {fecha} a las {hora} ({modalidad}).",
+                        postulacion_id,
+                    ),
+                ),
+            ]
+        )
+    elif Config.USE_SQLITE:
         cur.execute(
             "INSERT INTO entrevistas (postulacion_id, fecha, hora, modalidad, lugar, estado) VALUES (?, ?, ?, ?, ?, 'PENDIENTE')",
             (postulacion_id, fecha, hora, modalidad, lugar or "Por confirmar"),
@@ -1618,8 +2163,19 @@ def agendar_entrevista(postulacion_id):
             (postulacion_id,),
         )
         cur.execute(
-            "INSERT INTO seguimiento (postulacion_id, estado, observacion) VALUES (?, 'ENTREVISTA', ?)",
-            (postulacion_id, f"Entrevista agendada para {fecha} a las {hora} ({modalidad})."),
+            """
+            INSERT INTO seguimiento
+                (postulacion_id, estado, observacion, estado_anterior,
+                 usuario_id, rol_actor)
+            VALUES (?, 'ENTREVISTA', ?, ?, ?, ?)
+            """,
+            (
+                postulacion_id,
+                f"Entrevista agendada para {fecha} a las {hora} ({modalidad}).",
+                postulacion["estado"],
+                session["usuario_id"],
+                session["rol"],
+            ),
         )
         postulante = cur.execute("SELECT * FROM postulantes WHERE id = ?", (postulacion["postulante_id"],)).fetchone()
         if postulante is not None:
@@ -1640,8 +2196,19 @@ def agendar_entrevista(postulacion_id):
             (postulacion_id,),
         )
         cur.execute(
-            "INSERT INTO seguimiento (postulacion_id, estado, observacion) VALUES (%s, 'ENTREVISTA', %s)",
-            (postulacion_id, f"Entrevista agendada para {fecha} a las {hora} ({modalidad})."),
+            """
+            INSERT INTO seguimiento
+                (postulacion_id, estado, observacion, estado_anterior,
+                 usuario_id, rol_actor)
+            VALUES (%s, 'ENTREVISTA', %s, %s, %s, %s)
+            """,
+            (
+                postulacion_id,
+                f"Entrevista agendada para {fecha} a las {hora} ({modalidad}).",
+                postulacion["estado"],
+                session["usuario_id"],
+                session["rol"],
+            ),
         )
         postulante = cur.execute("SELECT * FROM postulantes WHERE id = %s", (postulacion["postulante_id"],)).fetchone()
         if postulante is not None:
@@ -1692,14 +2259,61 @@ def actualizar_estado_postulacion(postulacion_id):
         flash("Estado no válido.", "error")
         return redirect(url_for("empresa_candidatos"))
 
-    if Config.USE_SQLITE:
+    if Config.CLOUDFLARE_WORKERS:
+        mensaje = f"El estado de tu postulación cambió a {estado}."
+        if observacion:
+            mensaje += f" Observación: {observacion}"
+        conn.execute_batch(
+            [
+                (
+                    "UPDATE postulaciones SET estado = ?, observacion = ? WHERE id = ?",
+                    (estado, observacion, postulacion_id),
+                ),
+                (
+                    """
+                    INSERT INTO seguimiento
+                        (postulacion_id, estado, observacion, estado_anterior,
+                         usuario_id, rol_actor)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        postulacion_id,
+                        estado,
+                        observacion or None,
+                        postulacion["estado"],
+                        session["usuario_id"],
+                        session["rol"],
+                    ),
+                ),
+                (
+                    """
+                    INSERT INTO notificaciones (usuario_id, mensaje, leida)
+                    SELECT usuario_id, ?, 0 FROM postulantes WHERE id = ?
+                    """,
+                    (mensaje, postulacion["postulante_id"]),
+                ),
+            ]
+        )
+    elif Config.USE_SQLITE:
         cur.execute(
             "UPDATE postulaciones SET estado = ?, observacion = ? WHERE id = ?",
             (estado, observacion, postulacion_id),
         )
         cur.execute(
-            "INSERT INTO seguimiento (postulacion_id, estado, observacion) VALUES (?, ?, ?)",
-            (postulacion_id, estado, observacion or None),
+            """
+            INSERT INTO seguimiento
+                (postulacion_id, estado, observacion, estado_anterior,
+                 usuario_id, rol_actor)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                postulacion_id,
+                estado,
+                observacion or None,
+                postulacion["estado"],
+                session["usuario_id"],
+                session["rol"],
+            ),
         )
         postulante = cur.execute("SELECT * FROM postulantes WHERE id = ?", (postulacion["postulante_id"],)).fetchone()
         if postulante is not None:
@@ -1715,8 +2329,20 @@ def actualizar_estado_postulacion(postulacion_id):
             (estado, observacion, postulacion_id),
         )
         cur.execute(
-            "INSERT INTO seguimiento (postulacion_id, estado, observacion) VALUES (%s, %s, %s)",
-            (postulacion_id, estado, observacion or None),
+            """
+            INSERT INTO seguimiento
+                (postulacion_id, estado, observacion, estado_anterior,
+                 usuario_id, rol_actor)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (
+                postulacion_id,
+                estado,
+                observacion or None,
+                postulacion["estado"],
+                session["usuario_id"],
+                session["rol"],
+            ),
         )
         postulante = cur.execute("SELECT * FROM postulantes WHERE id = %s", (postulacion["postulante_id"],)).fetchone()
         if postulante is not None:
@@ -1849,7 +2475,8 @@ def not_found(error):
 
 @app.errorhandler(413)
 def file_too_large(error):
-    flash("El archivo supera el máximo permitido de 10 MB.", "error")
+    max_size_mb = 1 if Config.CLOUDFLARE_WORKERS else 10
+    flash(f"El archivo supera el máximo permitido de {max_size_mb} MB.", "error")
     return redirect(url_for("postulante_perfil"))
 
 

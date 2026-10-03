@@ -1,4 +1,5 @@
 import tempfile
+import re
 import unittest
 import uuid
 from io import BytesIO
@@ -11,6 +12,8 @@ import app as app_module
 
 class PrivacyAndUploadsTest(unittest.TestCase):
     def setUp(self):
+        self.csrf_patch = patch.object(app_module.Config, "CSRF_ENABLED", False)
+        self.csrf_patch.start()
         self.database_dir = tempfile.TemporaryDirectory()
         self.database_patch = patch.object(
             app_module.Config,
@@ -29,6 +32,7 @@ class PrivacyAndUploadsTest(unittest.TestCase):
         self.upload_dir.cleanup()
         self.database_patch.stop()
         self.database_dir.cleanup()
+        self.csrf_patch.stop()
 
     def test_homepage_renders_jinja_and_utf8(self):
         response = self.client.get("/")
@@ -49,7 +53,41 @@ class PrivacyAndUploadsTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json(), {"status": "ok"})
 
-    def test_cloudflare_without_hyperdrive_renders_presentation_only(self):
+    def test_post_requests_require_csrf_token(self):
+        with patch.object(app_module.Config, "CSRF_ENABLED", True):
+            login_page = self.client.get("/login")
+            token_match = re.search(
+                rb'name="csrf_token" value="([^"]+)"',
+                login_page.data,
+            )
+            self.assertIsNotNone(token_match)
+            token = token_match.group(1).decode("ascii")
+
+            rejected = self.client.post(
+                "/login",
+                data={"correo": "nobody@example.test", "password": "wrong"},
+            )
+            accepted = self.client.post(
+                "/login",
+                data={
+                    "correo": "nobody@example.test",
+                    "password": "wrong",
+                    "csrf_token": token,
+                },
+            )
+
+        self.assertEqual(rejected.status_code, 400)
+        self.assertEqual(accepted.status_code, 200)
+
+    def test_password_hash_uses_workers_compatible_pbkdf2(self):
+        password = "secure-password-123"
+        password_hash = app_module.hash_password(password)
+
+        self.assertTrue(password_hash.startswith("pbkdf2:sha256:600000$"))
+        self.assertTrue(app_module.check_password_hash(password_hash, password))
+        self.assertFalse(app_module.check_password_hash(password_hash, "incorrect"))
+
+    def test_cloudflare_without_database_renders_presentation_only(self):
         with (
             patch.object(app_module.Config, "CLOUDFLARE_WORKERS", True),
             patch.dict(app_module.app.config, {"SECRET_KEY": None}),
@@ -86,7 +124,230 @@ class PrivacyAndUploadsTest(unittest.TestCase):
         self.assertEqual(static_response.status_code, 200)
         self.assertEqual(static_response.get_data(), b"body { color: black; }")
         self.assertEqual(restricted_response.status_code, 503)
-        self.assertIn("base de datos", restricted_response.get_data(as_text=True))
+        self.assertIn("D1", restricted_response.get_data(as_text=True))
+
+    def test_cloudflare_routes_are_enabled_when_required_bindings_exist(self):
+        worker_env = SimpleNamespace(
+            SECRET_KEY="test-secret-key",
+            DB=object(),
+            CV_BUCKET=object(),
+        )
+        with (
+            patch.object(app_module.Config, "CLOUDFLARE_WORKERS", True),
+            self.client.application.test_request_context(
+                "/login",
+                environ_overrides={"workers.env": worker_env},
+            ),
+        ):
+            self.assertFalse(app_module.is_cloudflare_limited_mode())
+
+    def test_d1_migration_creates_expected_tables(self):
+        import sqlite3
+
+        migrations = Path(__file__).resolve().parents[1] / "migrations"
+        connection = sqlite3.connect(":memory:")
+        for migration in sorted(migrations.glob("*.sql")):
+            connection.executescript(migration.read_text(encoding="utf-8"))
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(seguimiento)")
+        }
+        connection.close()
+
+        self.assertTrue(
+            {
+                "usuarios",
+                "postulantes",
+                "empresas",
+                "ofertas",
+                "ofertas_favoritas",
+                "postulaciones",
+                "seguimiento",
+                "curriculums",
+                "cv_archivos",
+                "entrevistas",
+                "notificaciones",
+            }.issubset(tables)
+        )
+        self.assertTrue(
+            {"estado_anterior", "usuario_id", "rol_actor"}.issubset(columns)
+        )
+
+    def test_d1_adapter_binds_nulls_and_returns_rows_and_insert_ids(self):
+        import importlib
+        import sys
+        import types
+        from datetime import date
+
+        jsnull = object()
+        ffi = types.ModuleType("pyodide.ffi")
+        ffi.run_sync = lambda result: result
+        ffi.jsnull = jsnull
+        ffi.to_js = lambda value: value
+        pyodide = types.ModuleType("pyodide")
+        pyodide.ffi = ffi
+        js = types.ModuleType("js")
+        js.fetch = object()
+        js.crypto = object()
+        js.Uint8Array = SimpleNamespace(new=lambda values: bytes(values))
+
+        class Statement:
+            def __init__(self, query):
+                self.query = query
+                self.parameters = ()
+
+            def bind(self, *parameters):
+                self.parameters = parameters
+                return self
+
+            def all(self):
+                return SimpleNamespace(
+                    results=[{"id": 7}],
+                    meta={"last_row_id": 0, "changes": 0},
+                )
+
+            def run(self):
+                return SimpleNamespace(
+                    results=[],
+                    meta={"last_row_id": 42, "changes": 1},
+                )
+
+            def first(self):
+                return SimpleNamespace(contenido=b"%PDF-test")
+
+        class Database:
+            def __init__(self):
+                self.statements = []
+                self.batches = []
+
+            def prepare(self, query):
+                statement = Statement(query)
+                self.statements.append(statement)
+                return statement
+
+            def batch(self, statements):
+                self.batches.append(statements)
+                return []
+
+        previous_module = sys.modules.pop("cloudflare_runtime", None)
+        try:
+            with patch.dict(
+                sys.modules,
+                {
+                    "pyodide": pyodide,
+                    "pyodide.ffi": ffi,
+                    "js": js,
+                },
+            ):
+                runtime = importlib.import_module("cloudflare_runtime")
+                database = Database()
+                worker_env = SimpleNamespace(DB=database)
+                connection = runtime.connect_d1(worker_env)
+                cursor = connection.cursor()
+                row = cursor.execute(
+                    "SELECT id FROM usuarios WHERE creado_en = ?",
+                    (date(2026, 10, 2),),
+                ).fetchone()
+                cursor.execute(
+                    "INSERT INTO usuarios (nombre) VALUES (?)",
+                    (None,),
+                )
+                runtime.save_cv_d1(worker_env, "cv/test.pdf", b"%PDF-test")
+                cv_bytes = runtime.load_cv_d1(worker_env, "cv/test.pdf")
+                connection.execute_batch(
+                    [
+                        ("INSERT INTO usuarios (nombre) VALUES (?)", ("Ana",)),
+                        ("INSERT INTO postulantes (usuario_id) VALUES (?)", (True,)),
+                    ]
+                )
+                cursor.close()
+                connection.close()
+        finally:
+            sys.modules.pop("cloudflare_runtime", None)
+            if previous_module is not None:
+                sys.modules["cloudflare_runtime"] = previous_module
+
+        self.assertEqual(row, {"id": 7})
+        self.assertEqual(database.statements[0].parameters, ("2026-10-02",))
+        self.assertEqual(database.statements[1].parameters, (jsnull,))
+        self.assertEqual(cursor.lastrowid, 42)
+        self.assertEqual(cursor.rowcount, 1)
+        self.assertEqual(database.statements[2].parameters, ("cv/test.pdf", b"%PDF-test"))
+        self.assertEqual(cv_bytes, b"%PDF-test")
+        self.assertEqual(len(database.batches), 1)
+        self.assertEqual(len(database.batches[0]), 2)
+        self.assertEqual(database.batches[0][1].parameters, (1,))
+
+    def test_cloudflare_initial_admin_setup_is_one_time(self):
+        import sqlite3
+
+        database_path = Path(app_module.Config.SQLITE_DB_PATH)
+
+        class SQLiteBatchConnection:
+            def __init__(self):
+                self.connection = sqlite3.connect(database_path)
+                self.connection.row_factory = sqlite3.Row
+
+            def cursor(self):
+                return self.connection.cursor()
+
+            def execute_batch(self, statements):
+                try:
+                    for query, parameters in statements:
+                        self.connection.execute(query, parameters)
+                    self.connection.commit()
+                except Exception:
+                    self.connection.rollback()
+                    raise
+
+            def close(self):
+                self.connection.close()
+
+        def open_test_database():
+            return SQLiteBatchConnection()
+
+        worker_env = SimpleNamespace(
+            SECRET_KEY="test-secret-key",
+            DB=object(),
+            CV_BUCKET=object(),
+            INITIAL_ADMIN_TOKEN="one-time-token",
+        )
+        with (
+            patch.object(app_module.Config, "CLOUDFLARE_WORKERS", True),
+            patch.object(app_module, "get_db", side_effect=open_test_database),
+            patch.object(
+                app_module,
+                "hash_password",
+                return_value=app_module.generate_password_hash(
+                    "a-long-secure-password",
+                    method="pbkdf2:sha256:600000",
+                ),
+            ),
+        ):
+            response = self.client.post(
+                "/setup-admin",
+                data={
+                    "token": "one-time-token",
+                    "nombre": "Admin",
+                    "apellido": "Prueba",
+                    "correo": "cloudflare-admin@example.test",
+                    "password": "a-long-secure-password",
+                },
+                environ_overrides={"workers.env": worker_env},
+            )
+            unavailable = self.client.get(
+                "/setup-admin",
+                environ_overrides={"workers.env": worker_env},
+            )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/login")
+        self.assertEqual(unavailable.status_code, 404)
 
     def test_static_assets_are_served_with_content_types(self):
         css = self.client.get("/static/css/style.css")
@@ -155,6 +416,66 @@ class PrivacyAndUploadsTest(unittest.TestCase):
         )
         self.assertEqual(self.client.get("/admin/dashboard").status_code, 200)
 
+    def test_candidates_can_save_and_remove_only_their_own_favorite_offers(self):
+        _, _, company_id = self.create_user("EMPRESA")
+        _, owner_user_id, owner_id = self.create_user("POSTULANTE")
+        _, other_user_id, _ = self.create_user("POSTULANTE")
+
+        conn = app_module.get_db()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO ofertas (empresa_id, titulo, descripcion, estado)
+            VALUES (?, ?, ?, 'ACTIVA')
+            """,
+            (company_id, "Oferta favorita de prueba", "Descripción de prueba"),
+        )
+        offer_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+
+        with self.client.session_transaction() as session:
+            session["usuario_id"] = owner_user_id
+            session["rol"] = "POSTULANTE"
+        saved = self.client.post(
+            f"/postulante/favoritos/{offer_id}",
+            data={"action": "guardar"},
+        )
+        self.assertEqual(saved.status_code, 302)
+        listing = self.client.get("/postulante/favoritos")
+        self.assertIn(b"Oferta favorita de prueba", listing.data)
+
+        with self.client.session_transaction() as session:
+            session["usuario_id"] = other_user_id
+            session["rol"] = "POSTULANTE"
+        self.client.post(
+            f"/postulante/favoritos/{offer_id}",
+            data={"action": "quitar"},
+        )
+        other_listing = self.client.get("/postulante/favoritos")
+        self.assertNotIn(b"Oferta favorita de prueba", other_listing.data)
+
+        with self.client.session_transaction() as session:
+            session["usuario_id"] = owner_user_id
+            session["rol"] = "POSTULANTE"
+        owner_listing = self.client.get("/postulante/favoritos")
+        self.assertIn(b"Oferta favorita de prueba", owner_listing.data)
+        removed = self.client.post(
+            f"/postulante/favoritos/{offer_id}",
+            data={"action": "quitar"},
+            follow_redirects=True,
+        )
+        self.assertIn(b"Oferta quitada de tus guardadas.", removed.data)
+        self.assertNotIn(b"Oferta favorita de prueba", removed.data)
+
+        conn = app_module.get_db()
+        favorite_count = conn.cursor().execute(
+            "SELECT COUNT(*) AS total FROM ofertas_favoritas WHERE postulante_id = ?",
+            (owner_id,),
+        ).fetchone()["total"]
+        conn.close()
+        self.assertEqual(favorite_count, 0)
+
     def create_user(self, role):
         email = f"{role.lower()}_{uuid.uuid4().hex}@example.test"
         conn = app_module.get_db()
@@ -214,6 +535,53 @@ class PrivacyAndUploadsTest(unittest.TestCase):
 
         self.client.get("/logout")
         self.assertEqual(self.client.get("/postulante/cv").status_code, 302)
+
+    def test_cloudflare_rejects_cv_larger_than_d1_row_budget(self):
+        email, _, _ = self.create_user("POSTULANTE")
+        self.client.post("/login", data={"correo": email, "password": "123456"})
+
+        database_path = Path(app_module.Config.SQLITE_DB_PATH)
+
+        def open_test_database():
+            connection = app_module.sqlite3.connect(database_path)
+            connection.row_factory = app_module.sqlite3.Row
+            return connection
+
+        worker_env = SimpleNamespace(SECRET_KEY="test-secret-key", DB=object())
+        with (
+            patch.object(app_module.Config, "CLOUDFLARE_WORKERS", True),
+            patch.object(app_module, "get_db", side_effect=open_test_database),
+            patch.object(app_module, "save_cv_file") as save_cv,
+        ):
+            response = self.client.post(
+                "/postulante/perfil",
+                data={
+                    "telefono": "",
+                    "ciudad": "Santiago",
+                    "region": "Metropolitana",
+                    "descripcion": "",
+                    "objetivo_profesional": "",
+                    "habilidades": "",
+                    "experiencia": "",
+                    "educacion": "",
+                    "curriculum": (
+                        BytesIO(b"%PDF-" + b"x" * app_module.MAX_CV_FILE_SIZE),
+                        "large.pdf",
+                    ),
+                },
+                content_type="multipart/form-data",
+                environ_overrides={"workers.env": worker_env},
+            )
+
+        self.assertEqual(response.status_code, 302)
+        with self.client.session_transaction() as session:
+            self.assertTrue(
+                any(
+                    "Cloudflare" in message and "1 MB" in message
+                    for _, message in session["_flashes"]
+                )
+            )
+        save_cv.assert_not_called()
 
     def test_application_requires_cv(self):
         email, _, _ = self.create_user("POSTULANTE")

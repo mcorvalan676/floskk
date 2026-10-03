@@ -20,6 +20,7 @@
                         <td>{{ entrevista.estado }}</td>
                         <td>
                             <form method="post" action="{{ url_for('actualizar_estado_entrevista', entrevista_id=entrevista.id) }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <select name="estado">
                                     {% for estado in ('PENDIENTE', 'REALIZADA', 'CANCELADA') %}
                                         <option value="{{ estado }}" {% if entrevista.estado == estado %}selected{% endif %}>{{ estado }}</option>

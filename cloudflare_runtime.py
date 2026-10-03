@@ -1,11 +1,12 @@
+import hmac
 from dataclasses import dataclass
+from datetime import date, datetime, time
 from pathlib import PurePosixPath
 
-import pymysql
 from flask import has_request_context, request
 from jinja2 import BaseLoader, TemplateNotFound
-from pyodide.ffi import JsException, run_sync, to_js
-from js import fetch, Response as JSResponse
+from pyodide.ffi import jsnull, run_sync, to_js
+from js import Uint8Array, crypto
 
 
 @dataclass
@@ -15,18 +16,155 @@ class WorkerAsset:
     body: bytes
 
 
-def connect_hyperdrive(worker_env):
-    binding = worker_env.HYPERDRIVE
-    return pymysql.connect(
-        host=binding.host,
-        port=int(binding.port),
-        user=binding.user,
-        password=binding.password,
-        database=binding.database,
-        charset="utf8mb4",
-        cursorclass=pymysql.cursors.DictCursor,
-        autocommit=False,
-    )
+PBKDF2_ITERATIONS = 100_000
+PBKDF2_ROUNDS = 6
+
+
+def _derive_pbkdf2(password, salt, iterations):
+    derived = password.encode("utf-8")
+    for round_number in range(PBKDF2_ROUNDS):
+        password_bytes = Uint8Array.new(to_js(list(derived)))
+        salt_bytes = Uint8Array.new(
+            to_js(list(f"{salt}:{round_number}".encode("utf-8")))
+        )
+        key = run_sync(
+            crypto.subtle.importKey(
+                "raw",
+                password_bytes,
+                to_js({"name": "PBKDF2"}),
+                False,
+                to_js(["deriveBits"]),
+            )
+        )
+        algorithm = to_js(
+            {
+                "name": "PBKDF2",
+                "salt": salt_bytes,
+                "iterations": iterations,
+                "hash": "SHA-256",
+            }
+        )
+        derived_bits = run_sync(crypto.subtle.deriveBits(algorithm, key, 256))
+        derived = bytes(Uint8Array.new(derived_bits).to_py())
+    return derived.hex()
+
+
+def hash_password_pbkdf2(password):
+    import secrets
+
+    salt = secrets.token_urlsafe(12)
+    digest = _derive_pbkdf2(password, salt, PBKDF2_ITERATIONS)
+    return f"pbkdf2-chain:sha256:{PBKDF2_ROUNDS}:{PBKDF2_ITERATIONS}${salt}${digest}"
+
+
+def verify_password_pbkdf2(password_hash, password):
+    try:
+        method, salt, expected_digest = password_hash.split("$", 2)
+        algorithm, digest_name, rounds, iterations = method.split(":")
+        if (
+            algorithm != "pbkdf2-chain"
+            or digest_name != "sha256"
+            or int(rounds) != PBKDF2_ROUNDS
+        ):
+            return False
+        actual_digest = _derive_pbkdf2(password, salt, int(iterations))
+    except (TypeError, ValueError):
+        return False
+    return hmac.compare_digest(actual_digest, expected_digest)
+
+
+class D1CursorAdapter:
+    def __init__(self, database):
+        self._database = database
+        self._rows = []
+        self._position = 0
+        self.lastrowid = None
+        self.rowcount = -1
+
+    def execute(self, query, parameters=()):
+        statement = _prepare_d1_statement(self._database, query, parameters)
+
+        is_read = query.lstrip().upper().startswith(("SELECT", "WITH"))
+        result = run_sync(statement.all() if is_read else statement.run())
+        raw_records = getattr(result, "results", [])
+        records = raw_records.to_py() if hasattr(raw_records, "to_py") else raw_records
+        self._rows = list(records or [])
+        self._position = 0
+        metadata = result.meta
+        if hasattr(metadata, "to_py"):
+            metadata = metadata.to_py()
+        if isinstance(metadata, dict):
+            self.lastrowid = metadata.get("last_row_id")
+            self.rowcount = metadata.get("changes", -1)
+        else:
+            self.lastrowid = getattr(metadata, "last_row_id", None)
+            self.rowcount = getattr(metadata, "changes", -1)
+        return self
+
+    def executemany(self, query, parameters):
+        for values in parameters:
+            self.execute(query, values)
+        return self
+
+    def fetchone(self):
+        if self._position >= len(self._rows):
+            return None
+        row = self._rows[self._position]
+        self._position += 1
+        return row
+
+    def fetchall(self):
+        rows = self._rows[self._position:]
+        self._position = len(self._rows)
+        return rows
+
+    def close(self):
+        self._rows = []
+
+
+class D1ConnectionAdapter:
+    def __init__(self, database):
+        self._database = database
+
+    def cursor(self):
+        return D1CursorAdapter(self._database)
+
+    def execute_batch(self, statements):
+        prepared = [
+            _prepare_d1_statement(self._database, query, parameters)
+            for query, parameters in statements
+        ]
+        return run_sync(self._database.batch(prepared))
+
+    def commit(self):
+        return None
+
+    def rollback(self):
+        return None
+
+    def close(self):
+        return None
+
+
+def _prepare_d1_statement(database, query, parameters=()):
+    statement = database.prepare(query)
+    if parameters:
+        values = []
+        for value in parameters:
+            if value is None:
+                values.append(jsnull)
+            elif isinstance(value, (date, datetime, time)):
+                values.append(value.isoformat())
+            elif isinstance(value, bool):
+                values.append(int(value))
+            else:
+                values.append(value)
+        statement = statement.bind(*values)
+    return statement
+
+
+def connect_d1(worker_env):
+    return D1ConnectionAdapter(worker_env.DB)
 
 
 def get_worker_asset(worker_env, path):
@@ -78,49 +216,29 @@ class CloudflareTemplateLoader(BaseLoader):
         return source, f"cloudflare://{asset_path}", lambda: True
 
 
-def save_cv_object(worker_env, key, content):
-    run_sync(worker_env.CV_BUCKET.put(key, to_js(content)))
+def save_cv_d1(worker_env, key, content):
+    binary_content = Uint8Array.new(to_js(list(content)))
+    statement = worker_env.DB.prepare(
+        """
+        INSERT INTO cv_archivos (archivo, contenido)
+        VALUES (?, ?)
+        ON CONFLICT(archivo) DO UPDATE SET contenido = excluded.contenido
+        """
+    ).bind(key, binary_content)
+    run_sync(statement.run())
 
 
-def load_cv_object(worker_env, key):
-    stored_object = run_sync(worker_env.CV_BUCKET.get(key))
-    if stored_object is None:
-        raise FileNotFoundError("Curriculum not found in R2.")
-    response = JSResponse.new(stored_object.body)
-    return bytes(run_sync(response.bytes()))
-
-
-def fetch_php_service(worker_env):
-    url = getattr(worker_env, "PHP_SERVICE_URL", "")
-    if not url.startswith("https://"):
-        return {
-            "success": False,
-            "message": "Configura PHP_SERVICE_URL con la URL HTTPS del servicio PHP.",
-        }, 503
-
-    try:
-        response = run_sync(fetch(url))
-    except JsException:
-        return {
-            "success": False,
-            "message": "El servicio PHP no está disponible.",
-        }, 503
-
-    if not response.ok:
-        return {
-            "success": False,
-            "message": f"El servicio PHP respondió HTTP {response.status}.",
-        }, 503
-
-    payload = run_sync(response.json())
-    if hasattr(payload, "to_py"):
-        payload = payload.to_py()
-    if not isinstance(payload, dict) or payload.get("success") is not True:
-        return {
-            "success": False,
-            "message": "El servicio PHP devolvió una respuesta no válida.",
-        }, 502
-    return payload, 200
+def load_cv_d1(worker_env, key):
+    statement = worker_env.DB.prepare(
+        "SELECT contenido FROM cv_archivos WHERE archivo = ?"
+    ).bind(key)
+    result = run_sync(statement.first())
+    if result is None:
+        raise FileNotFoundError("Curriculum not found in D1.")
+    content = result.contenido
+    if hasattr(content, "to_py"):
+        content = content.to_py()
+    return bytes(content)
 
 
 class CloudflareEnvironmentMiddleware:

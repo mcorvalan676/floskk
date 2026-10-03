@@ -4,6 +4,7 @@
 <div class="form-card">
 <h1>Crear cuenta</h1>
 <form method="post">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 <div class="grid">
 <label>Nombre<input name="nombre" required></label>
 <label>Apellido<input name="apellido" required></label>

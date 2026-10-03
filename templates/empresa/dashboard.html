@@ -34,6 +34,7 @@
                             <td>{{ oferta.estado }}</td>
                             <td>
                                 <form method="post" action="{{ url_for('actualizar_estado_oferta', oferta_id=oferta.id) }}">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                     <select name="estado">
                                         {% for estado in ('ACTIVA', 'PAUSADA', 'CERRADA') %}
                                             <option value="{{ estado }}" {% if oferta.estado == estado %}selected{% endif %}>{{ estado }}</option>

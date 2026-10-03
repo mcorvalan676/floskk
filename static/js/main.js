@@ -1,3 +1,34 @@
+const menuToggle = document.querySelector(".mobile-nav-toggle");
+const navigation = document.querySelector("#site-navigation");
+
+if (menuToggle && navigation) {
+    document.documentElement.classList.add("has-mobile-nav");
+
+    const closeMenu = () => {
+        menuToggle.setAttribute("aria-expanded", "false");
+        navigation.classList.remove("is-open");
+    };
+
+    menuToggle.addEventListener("click", () => {
+        const isExpanded = menuToggle.getAttribute("aria-expanded") === "true";
+        menuToggle.setAttribute("aria-expanded", String(!isExpanded));
+        navigation.classList.toggle("is-open", !isExpanded);
+    });
+
+    navigation.addEventListener("click", (event) => {
+        if (event.target instanceof Element && event.target.closest("a")) {
+            closeMenu();
+        }
+    });
+
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && menuToggle.getAttribute("aria-expanded") === "true") {
+            closeMenu();
+            menuToggle.focus();
+        }
+    });
+}
+
 const integrationPanel = document.querySelector("#php-integration");
 
 if (integrationPanel) {

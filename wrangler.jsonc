@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "conectatalento",
+  "name": "floskk",
   "main": "worker.py",
   "compatibility_date": "2026-09-25",
   "compatibility_flags": ["python_workers"],
@@ -11,5 +11,13 @@
     "directory": ".",
     "binding": "ASSETS",
     "run_worker_first": true
-  }
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "conectatalento",
+      "database_id": "ffc68e33-6a62-40ef-b7e1-920e12e7c653",
+      "migrations_dir": "migrations"
+    }
+  ]
 }

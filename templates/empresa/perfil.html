@@ -6,6 +6,7 @@
     <p>Define la información pública y profesional de tu organización.</p>
 
     <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label>Nombre de la empresa
             <input name="nombre_empresa" value="{{ perfil.nombre_empresa or '' }}" required>
         </label>

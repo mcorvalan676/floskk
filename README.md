@@ -9,9 +9,13 @@ Plataforma escolar de reclutamiento y selección que conecta empresas con postul
 - Ofertas activas con búsqueda por cargo, ciudad, tipo de contrato, jornada y habilidad.
 - Postulaciones sin duplicados; se exige un perfil y un CV PDF.
 - Historial de estados, cálculo orientativo de compatibilidad por habilidades y notificaciones al postulante y a la empresa.
+- Historial de postulaciones con estado anterior/nuevo y el usuario y rol que realizaron cada cambio.
+- Paneles con indicadores reales; el panel del postulante muestra su próxima entrevista y permite marcar notificaciones como leídas.
+- Los postulantes pueden guardar ofertas por separado de sus postulaciones y quitarlas cuando quieran.
 - Gestión de candidatos limitada a postulaciones en ofertas de la empresa autenticada; filtros por estado, ciudad, habilidad, experiencia y educación.
 - CV privado descargable únicamente por su titular y por empresas relacionadas con una postulación.
 - Entrevistas con seguimiento de estado.
+- Paneles para empresas y postulantes con indicadores de actividad y acceso a sus procesos.
 - Panel administrativo con estadísticas y activación/desactivación de cuentas empresariales y postulantes.
 - Servicio PHP de solo lectura que devuelve ofertas activas agrupadas por sector.
 
@@ -23,7 +27,7 @@ Los videos se guardan como enlaces HTTP/HTTPS. La compatibilidad es una coincide
 - HTML, CSS y JavaScript ES6.
 - MySQL 8+ (principal) o SQLite (demo local).
 - PHP 8+ con PDO MySQL para el servicio complementario.
-- Cloudflare Workers (Python Workers/WSGI), Hyperdrive para MySQL y R2 para CV, o Flask en Render con conexión MySQL directa y R2 para CV.
+- Cloudflare Workers (Python Workers/WSGI) con D1, o Flask en Render con conexión MySQL directa y R2 para CV.
 
 ## Ejecución local con SQLite
 
@@ -37,7 +41,7 @@ Copy-Item .env.example .env
 python app.py
 ```
 
-Abre <http://127.0.0.1:5000>. SQLite se inicializa automáticamente en `database/conectatalento.db`; no requiere un servidor MySQL. Para registrar un CV, carga un PDF de hasta 10 MB desde el perfil del postulante.
+Abre <http://127.0.0.1:5000>. SQLite se inicializa automáticamente en `database/conectatalento.db`; no requiere un servidor MySQL. Para registrar un CV, carga un PDF de hasta 10 MB desde el perfil del postulante. En Cloudflare Workers el límite es 1 MB para respetar el máximo de 2 MB por fila de D1.
 
 ## Ejecución con MySQL
 
@@ -85,13 +89,13 @@ $env:MYSQL_PASSWORD = "tu-clave"
 php -S 127.0.0.1:8000
 ```
 
-La landing consulta `/api/php/sectores` en Flask. En desarrollo, Flask reenvía la solicitud a `http://127.0.0.1:8000/servicio.php`; en Cloudflare, `PHP_SERVICE_URL` debe apuntar a la URL HTTPS pública del servicio PHP. El PHP permanece como un servicio independiente y necesita conectividad a MySQL. La aplicación Flask muestra un mensaje de indisponibilidad si PHP no responde.
+La landing consulta `/api/php/sectores` en Flask. En desarrollo local, Flask reenvía la solicitud a `http://127.0.0.1:8000/servicio.php`; en Cloudflare, consulta directamente las ofertas activas en D1. El servicio PHP sigue siendo opcional y se ejecuta de forma independiente.
 
 ## Despliegue de Flask en Render con TiDB
 
 Esta alternativa ejecuta Flask/Gunicorn en Render y conecta directamente a TiDB con `mysql-connector-python`; no usa Hyperdrive. El blueprint está en `render.yaml`, usa el plan gratuito para pruebas y sirve `/healthz` como verificación de salud. Los servicios gratuitos de Render pueden suspenderse al quedar inactivos, usan disco efímero y pueden ser limitados por mucho tráfico saliente hacia servicios externos. Para producción de uso continuo, revisa el plan de pago de Render.
 
-No uses el despliegue Cloudflare Workers/Hyperdrive de abajo para esta instancia TiDB: la conexión falló porque Hyperdrive no admite el mensaje de autenticación `AuthSwitchRequest` que devuelve TiDB Starter. Render usa una conexión MySQL directa y evita esa incompatibilidad.
+No uses el despliegue Cloudflare Workers de abajo para esta instancia TiDB: la conexión anterior con Hyperdrive falló porque no admite el mensaje de autenticación `AuthSwitchRequest` que devuelve TiDB Starter. Cloudflare ahora usa su base D1 independiente; Render conserva la conexión MySQL directa.
 
 1. En Cloudflare R2, crea un bucket privado para los currículums y una API token con permisos de lectura/escritura de objetos limitado a ese bucket. Ten a mano el Account ID, Access Key ID, Secret Access Key y nombre del bucket. R2 evita guardar CV en el disco efímero de Render.
 2. En TiDB Cloud, conserva la instancia y base `conectatalento`. En Networking/IP Access List, autoriza las direcciones de salida de Render para la región `Ohio`, consultándolas en el panel del servicio Render. No uses `0.0.0.0/0`; permite solo las IPs/rangos publicados por Render. La conexión MySQL se hace por TLS con verificación de certificado e identidad.
@@ -119,58 +123,70 @@ El build de Render instala `requirements-hosted.txt`; no cambia las dependencias
 
 ## Despliegue en Cloudflare Workers
 
-El Worker usa el entry point WSGI de Cloudflare para ejecutar Flask. Flask sigue procesando las rutas y todas las plantillas Jinja; `templates/` y `static/` se empaquetan como assets internos y las plantillas no se exponen como archivos públicos. Los CV se guardan en R2, no en el filesystem efímero del Worker.
+El Worker usa Flask/WSGI y Cloudflare D1 para los datos y los CV. Las plantillas Jinja y los recursos CSS/JS se empaquetan como assets internos. La integración de sectores consulta directamente las ofertas en D1 y no requiere publicar el servicio PHP. Como D1 limita cada fila a 2 MB, los CV de esta modalidad se limitan a 1 MB; el despliegue local y Render mantienen sus límites actuales.
+
+Los formularios que modifican datos usan protección CSRF. En D1, el registro, el alta inicial de administración, las postulaciones, las entrevistas y los cambios de estado agrupan sus escrituras relacionadas en lotes transaccionales.
 
 ### Requisitos y preparación
 
-1. Instala [Node.js](https://nodejs.org/) y [uv](https://docs.astral.sh/uv/). En PowerShell, desde la raíz del proyecto:
+1. Instala [Node.js](https://nodejs.org/) y [uv](https://docs.astral.sh/uv/), inicia sesión y crea la base D1:
 
    ```powershell
    uv sync
    npx wrangler login
+   npx wrangler d1 create conectatalento
    ```
 
-2. Conserva el MySQL existente o prepara una base MySQL accesible desde Cloudflare. Hyperdrive necesita poder conectarse al host. Ejecuta `database/schema.sql` contra esa base antes del despliegue. El Worker no inicializa tablas ni crea usuarios/empresas/ofertas al arrancar. Provisiona una cuenta administradora de forma segura con el comando anterior.
+2. Copia el `database_id` que devuelve D1 y reemplaza `REPLACE_WITH_D1_DATABASE_ID` en `wrangler.jsonc`. Conserva el nombre de binding `DB`.
 
-3. En Cloudflare, crea una configuración Hyperdrive que apunte a esa base MySQL. En `wrangler.jsonc`, sustituye `REPLACE_WITH_HYPERDRIVE_ID` por el identificador devuelto por Cloudflare. No guardes la cadena de conexión ni credenciales de MySQL en el repositorio.
-
-4. Crea el bucket R2 especificado en `wrangler.jsonc`:
+3. Aplica el esquema inicial a la base remota:
 
    ```powershell
-   npx wrangler r2 bucket create conectatalento-cv
+   npx wrangler d1 migrations apply conectatalento --remote
    ```
 
-5. Actualiza `PHP_SERVICE_URL` en `wrangler.jsonc` con la URL HTTPS del servicio PHP desplegado. El archivo `php/integration/servicio.php` no se ejecuta en el Worker ni se publica como asset; debe desplegarse por separado con PHP 8+, PDO MySQL y acceso a la misma base.
-
-6. Configura el secreto de sesión con Wrangler. Se solicita el valor de forma interactiva:
+4. Configura dos secretos distintos. Wrangler los solicita de forma interactiva; no los guardes en archivos versionados:
 
    ```powershell
    npx wrangler secret put SECRET_KEY
+   npx wrangler secret put INITIAL_ADMIN_TOKEN
    ```
 
-   Genera una clave aleatoria larga localmente; no la incluyas en comandos compartidos ni en archivos versionados.
+   Usa una clave larga y aleatoria para `SECRET_KEY` y un token temporal independiente para `INITIAL_ADMIN_TOKEN`.
 
-7. Configura el Worker conectado a GitHub para que **Build command** esté vacío y **Deploy command** sea `python scripts/wrangler_build.py floskk`. El script sincroniza las dependencias de Python Workers, aparta temporalmente `.venv` y `.venv-workers` para que Wrangler no los incluya como módulos Python y los restaura al terminar. En Windows, usa el script PowerShell equivalente:
+5. Despliega el Worker. En Windows, ejecuta `.\scripts\wrangler.ps1 deploy`. También puedes configurar el Worker conectado a GitHub con **Build command** vacío y **Deploy command** `python scripts/wrangler_build.py floskk`. Para validar sin publicar, ejecuta `python scripts/wrangler_build.py floskk --dry-run`.
+
+6. Crea la primera cuenta administradora en `https://<nombre-del-worker>.workers.dev/setup-admin`, usando el token temporal, tu correo y una contraseña de al menos 12 caracteres. Después elimina inmediatamente el secreto de bootstrap:
 
    ```powershell
-   .\scripts\wrangler.ps1 dry-run
-   .\scripts\wrangler.ps1 dev --local --port 8787
-   .\scripts\wrangler.ps1 deploy
+   npx wrangler secret delete INITIAL_ADMIN_TOKEN
    ```
 
-   Para validar manualmente el comando de Cloudflare sin subir el Worker, ejecuta `python scripts/wrangler_build.py floskk --dry-run`. `dev` requiere acceso a los bindings configurados. Para Hyperdrive local, define temporalmente `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` con una URL MySQL local; no guardes esa cadena en Git. El arranque tradicional `python app.py` y `python -m unittest` siguen usando la configuración local y `requirements-local.txt`. Pywrangler no admite un `requirements.txt` en el raíz del proyecto; las dependencias Worker están declaradas exclusivamente en `pyproject.toml`.
+   La página de bootstrap queda desactivada al crear la primera cuenta ADMIN y también devuelve 404 si eliminas el token.
 
 ### Variables y bindings de producción
 
 | Nombre | Tipo | Uso |
 |---|---|---|
-| `SECRET_KEY` | Secret de Worker | Firma segura de sesiones Flask. Crear con `wrangler secret put SECRET_KEY`. |
-| `HYPERDRIVE` | Binding Hyperdrive | Conexión agrupada a la base de datos MySQL existente. |
-| `CV_BUCKET` | Binding R2 | Almacenamiento persistente privado de currículums. |
+| `SECRET_KEY` | Secret de Worker | Firma segura de sesiones Flask. |
+| `INITIAL_ADMIN_TOKEN` | Secret temporal | Alta única del primer administrador; eliminar tras usar. |
+| `DB` | Binding D1 | Usuarios, perfiles, ofertas, postulaciones, entrevistas, notificaciones y CV PDF. |
 | `ASSETS` | Binding de assets | Lectura de templates Jinja y recursos CSS/JS empaquetados. |
-| `PHP_SERVICE_URL` | Variable no secreta | URL HTTPS de `servicio.php` desplegado independientemente. |
 
-El Worker conserva MySQL y las tablas: no hay migración automática a D1. `mysql-connector-python` y `python-dotenv` se usan en la ejecución local y están declarados en `requirements-local.txt`; `python-dotenv` también figura en el grupo `dev` de `pyproject.toml` para que `uv sync` permita importar la app fuera del Worker. El bundle necesita Flask y PyMySQL, mientras el SDK/CLI de Workers se declara en el grupo de desarrollo. SQLite y la creación automática del esquema son exclusivamente locales; los usuarios se registran o se crean explícitamente con el comando de administración. En modo MySQL tradicional, configura `SECRET_KEY`; la clave fija de desarrollo solo se permite en modo SQLite local.
+Las migraciones versionadas `migrations/` crean el esquema, los CV en D1, las ofertas guardadas y el historial auditable de cambios de postulaciones; las migraciones siguientes deben usar versiones posteriores. D1 tiene cuotas gratuitas y límites de almacenamiento/solicitudes de Cloudflare, sujetos a cambios: compruébalos en el panel antes de operaciones con mucho tráfico. Los registros y CV guardados en SQLite, MySQL o R2 no se copian automáticamente a D1.
+
+En una base MySQL existente, actualiza `seguimiento` antes de desplegar el código que registra actores:
+
+```sql
+ALTER TABLE seguimiento
+    ADD COLUMN estado_anterior VARCHAR(50) NULL,
+    ADD COLUMN usuario_id INT NULL,
+    ADD COLUMN rol_actor ENUM('POSTULANTE','EMPRESA','ADMIN') NULL,
+    ADD CONSTRAINT fk_seguimiento_actor
+        FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE SET NULL;
+```
+
+El arranque tradicional `python app.py` sigue usando SQLite local por defecto; Render/TiDB y la ejecución local MySQL no cambian. La configuración de Hyperdrive/TiDB no se usa en Cloudflare. En modo limitado, el Worker muestra la portada pero bloquea las demás rutas hasta que estén configurados D1 y `SECRET_KEY`.
 
 `wrangler.jsonc` usa una fecha de compatibilidad vigente para Python Workers y la bandera `python_workers`. `.assetsignore` restringe los assets empaquetados a `templates/` y `static/`.
 
@@ -185,7 +201,8 @@ El Worker conserva MySQL y las tablas: no hay migración automática a D1. `mysq
 - `php/integration/servicio.php`: endpoint auxiliar JSON.
 - `uploads/cv/`: almacenamiento privado de CV; nunca se sirve como contenido estático.
 - `worker.py` y `src/worker.py`: entry point de Wrangler y adaptador WSGI.
-- `cloudflare_runtime.py`: bindings Hyperdrive/R2/assets y acceso al servicio PHP desde el Worker.
+- `cloudflare_runtime.py`: adaptadores D1 y acceso a assets desde el Worker.
+- `migrations/`: migraciones versionadas del esquema Cloudflare D1.
 - `pyproject.toml`, `wrangler.jsonc` y `.assetsignore`: dependencias y configuración de Cloudflare.
 
 La herencia se representa mediante `Postulante` y `Empresa`, que especializan `Usuario`. `Postulacion` valida sus estados y `ProcesoSeleccion` registra los avances, mientras `Curriculum` encapsula la validación del formato.
@@ -196,4 +213,4 @@ La herencia se representa mediante `Postulante` y `Empresa`, que especializan `U
 python -m unittest discover -s tests -v
 ```
 
-El conjunto automatizado valida rutas de perfil, cambios de estado, notificaciones, entrevistas, renderizado Jinja, UTF-8, recursos estáticos y el endpoint de salud. La conexión real a MySQL/Hyperdrive, R2 y el endpoint PHP requieren servicios configurados; no se simulan como si estuvieran disponibles.
+El conjunto automatizado valida rutas de perfil, cambios de estado, notificaciones, entrevistas, renderizado Jinja, UTF-8, recursos estáticos, la migración D1 y el alta inicial del administrador. Las conexiones reales a D1, MySQL y el endpoint PHP requieren servicios configurados.

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Crear administrador{% endblock %}
+{% block content %}
+<div class="form-card">
+<h1>Crear cuenta administradora</h1>
+<p>Este acceso de configuración se desactiva después de crear la primera cuenta administradora.</p>
+<form method="post">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<label>Token de configuración<input type="password" name="token" autocomplete="off" required></label>
+<label>Nombre<input name="nombre" required></label>
+<label>Apellido<input name="apellido" required></label>
+<label>Correo<input type="email" name="correo" required></label>
+<label>Contraseña<input type="password" name="password" minlength="12" required></label>
+<button class="btn primary" type="submit">Crear administrador</button>
+</form>
+</div>
+{% endblock %}

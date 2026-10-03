@@ -6,6 +6,7 @@
     <p>Actualiza tus datos para presentar mejor tu perfil a las empresas.</p>
 
     <form method="post" enctype="multipart/form-data">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="grid">
             <label>Teléfono
                 <input name="telefono" value="{{ perfil.telefono or '' }}">
@@ -34,7 +35,7 @@
         <label>Educación
             <textarea name="educacion">{{ perfil.educacion or '' }}</textarea>
         </label>
-        <label>Currículum (PDF, máximo 10 MB)
+        <label>Currículum (PDF, máximo {{ max_cv_upload_mb }} MB)
             <input type="file" name="curriculum" accept="application/pdf,.pdf">
         </label>
         {% if perfil.curriculum_archivo %}

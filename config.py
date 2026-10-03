@@ -59,9 +59,13 @@ if IS_RENDER:
 
 class Config:
     SECRET_KEY = SECRET_KEY
-    USE_SQLITE = USE_SQLITE
+    USE_SQLITE = USE_SQLITE or IS_CLOUDFLARE_WORKER
     CLOUDFLARE_WORKERS = IS_CLOUDFLARE_WORKER
     DEBUG = os.getenv("FLASK_DEBUG", "0").lower() in {"1", "true", "yes", "y"}
+    CSRF_ENABLED = os.getenv("CSRF_ENABLED", "1").lower() in {"1", "true", "yes", "y"}
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = "Lax"
+    SESSION_COOKIE_SECURE = IS_CLOUDFLARE_WORKER or IS_RENDER
     MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
     MYSQL_USER = os.getenv("MYSQL_USER", "root")
     MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")

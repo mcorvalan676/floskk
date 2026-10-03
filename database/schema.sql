@@ -59,6 +59,16 @@ CREATE TABLE ofertas (
     FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
 );
 
+CREATE TABLE ofertas_favoritas (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    postulante_id INT NOT NULL,
+    oferta_id INT NOT NULL,
+    creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY favorita_unica (postulante_id, oferta_id),
+    FOREIGN KEY (postulante_id) REFERENCES postulantes(id) ON DELETE CASCADE,
+    FOREIGN KEY (oferta_id) REFERENCES ofertas(id) ON DELETE CASCADE
+);
+
 CREATE TABLE postulaciones (
     id INT AUTO_INCREMENT PRIMARY KEY,
     oferta_id INT NOT NULL,
@@ -126,9 +136,13 @@ CREATE TABLE seguimiento (
     id INT AUTO_INCREMENT PRIMARY KEY,
     postulacion_id INT NOT NULL,
     estado VARCHAR(50) NOT NULL,
+    estado_anterior VARCHAR(50),
     observacion TEXT,
     fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (postulacion_id) REFERENCES postulaciones(id) ON DELETE CASCADE
+    usuario_id INT,
+    rol_actor ENUM('POSTULANTE','EMPRESA','ADMIN'),
+    FOREIGN KEY (postulacion_id) REFERENCES postulaciones(id) ON DELETE CASCADE,
+    FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE SET NULL
 );
 
 CREATE TABLE administradores (

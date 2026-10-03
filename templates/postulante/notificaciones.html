@@ -18,6 +18,10 @@
                                     <span>Leída</span>
                                 {% else %}
                                     <span>No leída</span>
+                                    <form method="post" action="{{ url_for('marcar_notificacion_leida', notificacion_id=item.id) }}">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button class="btn small secondary" type="submit">Marcar como leída</button>
+                                    </form>
                                 {% endif %}
                             </div>
                         </div>

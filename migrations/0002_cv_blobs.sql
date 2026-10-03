@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS cv_archivos (
+    archivo TEXT PRIMARY KEY,
+    contenido BLOB NOT NULL,
+    creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

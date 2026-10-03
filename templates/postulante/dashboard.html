@@ -8,15 +8,47 @@
 
     <div class="actions">
         <a class="btn primary" href="{{ url_for('ofertas') }}">Buscar ofertas</a>
+        <a class="btn secondary" href="{{ url_for('postulante_favoritos') }}">Ofertas guardadas</a>
         <a class="btn secondary" href="{{ url_for('postulante_perfil') }}">Mi perfil</a>
         <a class="btn secondary" href="{{ url_for('postulante_notificaciones') }}">Notificaciones</a>
     </div>
 
     <div class="cards">
-        <article><h3>Mi perfil</h3><p>Actualiza tus datos, experiencia y habilidades.</p></article>
-        <article><h3>Mis postulaciones</h3><p>Consulta el estado de cada oportunidad.</p></article>
-        <article><h3>Notificaciones</h3><p>Revisa avisos y cambios de proceso.</p></article>
+        <article>
+            <h3>Ofertas disponibles</h3>
+            <strong>{{ stats.ofertas_disponibles }}</strong>
+            <p>Vacantes activas para explorar.</p>
+        </article>
+        <article>
+            <h3>Mis postulaciones</h3>
+            <strong>{{ postulaciones|length }}</strong>
+            <p>{{ stats.en_revision }} en revisión o preselección.</p>
+        </article>
+        <article>
+            <h3>Entrevistas próximas</h3>
+            <strong>{{ stats.entrevistas_proximas }}</strong>
+            <p>Entrevistas pendientes desde hoy.</p>
+        </article>
+        <article>
+            <h3>Perfil completo</h3>
+            <strong>{{ perfil_completitud }}%</strong>
+            <p>CV {{ 'cargado' if curriculum_cargado else 'pendiente' }}.</p>
+            {% if perfil_completitud < 100 %}
+                <a href="{{ url_for('postulante_perfil') }}">Completar perfil</a>
+            {% endif %}
+        </article>
     </div>
+
+    {% if proxima_entrevista %}
+        <section class="panel" style="margin-top:24px;" aria-labelledby="next-interview-heading">
+            <h2 id="next-interview-heading">Próxima entrevista</h2>
+            <p><strong>{{ proxima_entrevista.titulo }}</strong> · {{ proxima_entrevista.nombre_empresa }}</p>
+            <p>{{ proxima_entrevista.fecha }} a las {{ proxima_entrevista.hora }} · {{ proxima_entrevista.modalidad }}</p>
+            {% if proxima_entrevista.lugar %}
+                <p>{{ proxima_entrevista.lugar }}</p>
+            {% endif %}
+        </section>
+    {% endif %}
 
     {% if postulaciones %}
         <div class="panel" style="margin-top:25px;">
@@ -44,7 +76,15 @@
                                         <summary>Ver historial</summary>
                                         <ol>
                                             {% for evento in historiales.get(item.id, []) %}
-                                                <li><strong>{{ evento.estado }}</strong> · {{ evento.fecha }}{% if evento.observacion %}<br>{{ evento.observacion }}{% endif %}</li>
+                                                <li>
+                                                    <strong>{{ evento.estado_anterior or 'Inicio' }} → {{ evento.estado }}</strong>
+                                                    · {{ evento.fecha }}
+                                                    {% if evento.rol_actor %}
+                                                        <br>Actualizado por {{ evento.rol_actor|lower }}
+                                                        {% if evento.actor_nombre %}: {{ evento.actor_nombre }} {{ evento.actor_apellido }}{% endif %}
+                                                    {% endif %}
+                                                    {% if evento.observacion %}<br>{{ evento.observacion }}{% endif %}
+                                                </li>
                                             {% else %}
                                                 <li>Sin movimientos registrados todavía.</li>
                                             {% endfor %}

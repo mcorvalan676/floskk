@@ -5,6 +5,7 @@
     <h1>Publicar oferta</h1>
     <p>Completa los datos para crear una nueva vacante.</p>
     <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label>Título del puesto
             <input name="titulo" required>
         </label>

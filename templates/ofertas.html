@@ -40,7 +40,18 @@
                 <div class="stack" style="min-width:160px;">
                     <a class="btn primary small" href="{{ url_for('oferta_detalle', oferta_id=oferta.id) }}">Ver oferta</a>
                     {% if session.get('rol') == 'POSTULANTE' %}
+                        <form method="post" action="{{ url_for('actualizar_favorito_oferta', oferta_id=oferta.id) }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            {% if oferta.id in ofertas_favoritas %}
+                                <input type="hidden" name="action" value="quitar">
+                                <button class="btn secondary small" type="submit">Quitar de guardadas</button>
+                            {% else %}
+                                <input type="hidden" name="action" value="guardar">
+                                <button class="btn secondary small" type="submit">Guardar oferta</button>
+                            {% endif %}
+                        </form>
                         <form method="post" action="{{ url_for('postular', oferta_id=oferta.id) }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                             <button class="btn secondary small" type="submit">Postular</button>
                         </form>
                     {% endif %}

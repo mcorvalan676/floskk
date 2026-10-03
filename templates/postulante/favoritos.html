@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Ofertas guardadas{% endblock %}
+{% block content %}
+<div class="dashboard">
+    <span class="eyebrow">MIS OPORTUNIDADES</span>
+    <h1>Ofertas guardadas</h1>
+    {% if ofertas %}
+        <div class="stack">
+            {% for oferta in ofertas %}
+                <article class="offer-item">
+                    <div>
+                        <h2>{{ oferta.titulo }}</h2>
+                        <div class="offer-meta">
+                            <span>{{ oferta.nombre_empresa }}</span>
+                            <span>{{ oferta.ubicacion or 'Remoto' }}</span>
+                            <span>{{ oferta.estado }}</span>
+                        </div>
+                        <p>Guardada el {{ oferta.creado_en }}</p>
+                    </div>
+                    <div class="stack">
+                        {% if oferta.disponible %}
+                            <a class="btn primary small" href="{{ url_for('oferta_detalle', oferta_id=oferta.id) }}">Ver oferta</a>
+                        {% else %}
+                            <span class="muted">Esta oferta ya no está disponible.</span>
+                        {% endif %}
+                        <form method="post" action="{{ url_for('actualizar_favorito_oferta', oferta_id=oferta.id) }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <input type="hidden" name="action" value="quitar">
+                            <button class="btn secondary small" type="submit">Quitar de guardadas</button>
+                        </form>
+                    </div>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <div class="panel">
+            <p>Aún no has guardado ofertas.</p>
+            <a class="btn primary" href="{{ url_for('ofertas') }}">Buscar ofertas</a>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

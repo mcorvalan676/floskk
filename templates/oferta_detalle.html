@@ -31,7 +31,18 @@
             {% endif %}
 
             {% if session.get('rol') == 'POSTULANTE' %}
+                <form method="post" action="{{ url_for('actualizar_favorito_oferta', oferta_id=oferta.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    {% if oferta_guardada %}
+                        <input type="hidden" name="action" value="quitar">
+                        <button class="btn secondary" type="submit">Quitar de ofertas guardadas</button>
+                    {% else %}
+                        <input type="hidden" name="action" value="guardar">
+                        <button class="btn secondary" type="submit">Guardar oferta</button>
+                    {% endif %}
+                </form>
                 <form method="post" action="{{ url_for('postular', oferta_id=oferta.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button class="btn primary" type="submit">Postular a esta oferta</button>
                 </form>
             {% else %}

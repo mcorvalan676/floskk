@@ -3,18 +3,27 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#ffffff">
     <title>{% block title %}ConectaTalento{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
-<header>
-    <a class="logo" href="{{ url_for('index') }}">Conecta<span>Talento</span></a>
-    <nav>
+<a class="skip-link" href="#main-content">Saltar al contenido</a>
+<header class="site-header">
+    <div class="header-top">
+        <a class="logo" href="{{ url_for('index') }}">Conecta<span>Talento</span></a>
+        <button class="mobile-nav-toggle" type="button" aria-expanded="false" aria-controls="site-navigation">
+            <span class="menu-icon" aria-hidden="true"><span></span><span></span><span></span></span>
+            Menú
+        </button>
+    </div>
+    <nav class="site-nav" id="site-navigation" aria-label="Navegación principal">
         <a href="{{ url_for('index') }}">Inicio</a>
         {% if cloudflare_limited_mode %}
             <span class="muted">Vista de presentación</span>
         {% elif session.get('rol') == 'POSTULANTE' %}
             <a href="{{ url_for('ofertas') }}">Ofertas</a>
+            <a href="{{ url_for('postulante_favoritos') }}">Guardadas</a>
             <a href="{{ url_for('postulante_dashboard') }}">Mi panel</a>
         {% elif session.get('rol') == 'EMPRESA' %}
             <a href="{{ url_for('empresa_dashboard') }}">Mi panel</a>
@@ -31,7 +40,7 @@
     </nav>
 </header>
 
-<main class="container">
+<main class="container" id="main-content">
 {% if cloudflare_limited_mode %}
     <div class="alert">Modo de presentación: las funciones que necesitan la base de datos están deshabilitadas.</div>
 {% endif %}

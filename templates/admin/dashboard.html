@@ -27,6 +27,7 @@
                             <td>
                                 {% if usuario.rol in ('EMPRESA', 'POSTULANTE') %}
                                     <form method="post" action="{{ url_for('actualizar_estado_usuario', usuario_id=usuario.id) }}">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                         <input type="hidden" name="activo" value="{{ 0 if usuario.activo else 1 }}">
                                         <button class="btn small {{ 'secondary' if usuario.activo else 'primary' }}" type="submit">
                                             {{ 'Desactivar' if usuario.activo else 'Activar' }}
