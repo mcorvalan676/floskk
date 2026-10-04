@@ -25,13 +25,23 @@
         <h2>Mis ofertas</h2>
         <div class="table-wrap">
             <table>
-                <thead><tr><th>Cargo</th><th>Ubicación</th><th>Estado</th><th>Actualizar</th></tr></thead>
+                <thead><tr><th>Cargo</th><th>Ubicación</th><th>Estado</th><th>Postulaciones</th><th>Actualizar</th></tr></thead>
                 <tbody>
-                    {% for oferta in ofertas %}
+                    {% for resumen in resumen_ofertas %}
+                        {% set oferta = resumen.oferta %}
                         <tr>
                             <td>{{ oferta.titulo }}</td>
                             <td>{{ oferta.ubicacion or 'No especificada' }}</td>
                             <td>{{ oferta.estado }}</td>
+                            <td>
+                                <strong>{{ resumen.conteos.total }} en total</strong>
+                                {% for estado in ('POSTULADO', 'REVISION', 'PRESELECCIONADO', 'ENTREVISTA', 'SELECCIONADO', 'RECHAZADO', 'FINALIZADO') %}
+                                    {% if resumen.conteos[estado] %}
+                                        <br>{{ estado|lower|replace('_', ' ')|capitalize }}: {{ resumen.conteos[estado] }}
+                                    {% endif %}
+                                {% endfor %}
+                                <br><a href="{{ url_for('empresa_candidatos', oferta_id=oferta.id) }}">Revisar postulaciones</a>
+                            </td>
                             <td>
                                 <form method="post" action="{{ url_for('actualizar_estado_oferta', oferta_id=oferta.id) }}">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -45,7 +55,7 @@
                             </td>
                         </tr>
                     {% else %}
-                        <tr><td colspan="4">Todavía no has publicado ofertas.</td></tr>
+                        <tr><td colspan="5">Todavía no has publicado ofertas.</td></tr>
                     {% endfor %}
                 </tbody>
             </table>

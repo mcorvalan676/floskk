@@ -80,4 +80,7 @@ class Config:
     PHP_SERVICE_URL = os.getenv(
         "PHP_SERVICE_URL", "http://127.0.0.1:8000/servicio.php"
     )
+    WORKERS_AI_MODEL = os.getenv(
+        "WORKERS_AI_MODEL", "@cf/meta/llama-3.2-3b-instruct"
+    )
     APP_NAME = "ConectaTalento"

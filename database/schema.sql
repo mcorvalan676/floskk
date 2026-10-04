@@ -132,6 +132,14 @@ CREATE TABLE notificaciones (
     FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
 );
 
+CREATE TABLE ai_usage (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    usuario_id INT NOT NULL,
+    creado_en VARCHAR(20) NOT NULL,
+    INDEX idx_ai_usage_user_created (usuario_id, creado_en),
+    FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+);
+
 CREATE TABLE seguimiento (
     id INT AUTO_INCREMENT PRIMARY KEY,
     postulacion_id INT NOT NULL,

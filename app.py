@@ -1,7 +1,7 @@
 import hmac
 import secrets
 import uuid
-from datetime import date, time
+from datetime import date, datetime, time, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 
@@ -20,7 +20,22 @@ from models.entrevista import Entrevista
 from models.notificacion import Notificacion
 from models.postulacion import Postulacion
 from models.proceso_seleccion import ProcesoSeleccion
-from services.compatibilidad import calcular_compatibilidad
+from services.compatibilidad import analizar_compatibilidad
+from services.ai.base import AIProviderError, AIUnavailableError
+from services.ai.interview import (
+    build_interview_messages,
+    fallback_interview_answer,
+)
+from services.ai.company_review import (
+    build_company_review_messages,
+    fallback_company_review,
+)
+from services.ai.profile_review import (
+    build_profile_review_messages,
+    fallback_profile_review,
+)
+from services.ai.prompts import SYSTEM_PROMPT, fallback_answer
+from services.ai.workers_ai import CloudflareWorkersAIProvider
 
 PASSWORD_HASH_METHOD = "pbkdf2:sha256:600000"
 
@@ -44,6 +59,9 @@ def verify_password(password_hash, password):
 app = Flask(__name__, static_folder=None)
 app.config.from_object(Config)
 MAX_CV_FILE_SIZE = 1024 * 1024
+AI_QUESTION_MAX_LENGTH = 1000
+AI_REQUESTS_PER_MINUTE = 5
+AI_REQUESTS_PER_DAY = 30
 app.config["MAX_CONTENT_LENGTH"] = (
     1250 * 1024 if Config.CLOUDFLARE_WORKERS else 10 * 1024 * 1024
 )
@@ -455,6 +473,22 @@ def init_db():
         )
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS ai_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                usuario_id INTEGER NOT NULL,
+                creado_en TEXT NOT NULL,
+                FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ai_usage_user_created
+                ON ai_usage(usuario_id, creado_en)
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS curriculums (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 postulante_id INTEGER NOT NULL UNIQUE,
@@ -661,6 +695,17 @@ def init_db():
         )
         cur.execute(
             """
+            CREATE TABLE IF NOT EXISTS ai_usage (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                usuario_id INT NOT NULL,
+                creado_en VARCHAR(20) NOT NULL,
+                INDEX idx_ai_usage_user_created (usuario_id, creado_en),
+                FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS curriculums (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 postulante_id INT NOT NULL UNIQUE,
@@ -798,6 +843,46 @@ def index():
 @app.route("/healthz")
 def health_check():
     return {"status": "ok"}
+
+
+def reserve_ai_request(user_id):
+    now = datetime.now(timezone.utc)
+    timestamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    minute_cutoff = (now - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    day_cutoff = (now - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    retention_cutoff = (now - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    placeholder = "?" if Config.USE_SQLITE else "%s"
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        f"DELETE FROM ai_usage WHERE usuario_id = {placeholder} AND creado_en < {placeholder}",
+        (user_id, retention_cutoff),
+    )
+    cur.execute(
+        f"""
+        INSERT INTO ai_usage (usuario_id, creado_en)
+        SELECT {placeholder}, {placeholder}
+        WHERE (
+            SELECT COUNT(*) FROM ai_usage
+            WHERE usuario_id = {placeholder} AND creado_en >= {placeholder}
+        ) < {AI_REQUESTS_PER_MINUTE}
+        AND (
+            SELECT COUNT(*) FROM ai_usage
+            WHERE creado_en >= {placeholder}
+        ) < {AI_REQUESTS_PER_DAY}
+        """,
+        (user_id, timestamp, user_id, minute_cutoff, day_cutoff),
+    )
+    reserved = cur.rowcount == 1
+    conn.commit()
+    cur.close()
+    conn.close()
+    return reserved
+
+
+def get_workers_ai_model(worker_env):
+    model = getattr(worker_env, "WORKERS_AI_MODEL", None)
+    return model.strip() if isinstance(model, str) and model.strip() else Config.WORKERS_AI_MODEL
 
 
 @app.route("/static/<path:filename>", endpoint="static")
@@ -1084,6 +1169,7 @@ def postulante_dashboard():
     }
     perfil_completitud = 0
     curriculum_cargado = False
+    perfil_checklist = []
     proxima_entrevista = None
     if postulante is not None:
         if Config.USE_SQLITE:
@@ -1185,6 +1271,23 @@ def postulante_dashboard():
             postulante["experiencia"],
             postulante["educacion"],
         )
+        perfil_checklist = [
+            {"label": label, "completo": bool(value and value.strip())}
+            for label, value in zip(
+                (
+                    "Teléfono",
+                    "Presentación profesional",
+                    "Objetivo profesional",
+                    "Habilidades",
+                    "Experiencia",
+                    "Educación",
+                ),
+                profile_values,
+            )
+        ]
+        perfil_checklist.append(
+            {"label": "Currículum en PDF", "completo": curriculum_cargado}
+        )
         completed_fields = sum(
             1 for value in profile_values if value and value.strip()
         ) + int(curriculum_cargado)
@@ -1198,8 +1301,283 @@ def postulante_dashboard():
         stats=stats,
         perfil_completitud=perfil_completitud,
         curriculum_cargado=curriculum_cargado,
+        perfil_checklist=perfil_checklist,
         proxima_entrevista=proxima_entrevista,
     )
+
+
+@app.route("/postulante/asistente")
+def postulante_asistente():
+    if session.get("rol") != "POSTULANTE":
+        return redirect(url_for("login"))
+    return render_template("postulante/asistente.html")
+
+
+@app.route("/api/postulante/asistente", methods=["POST"])
+def postulante_asistente_responder():
+    if session.get("rol") != "POSTULANTE":
+        abort(403)
+
+    question = request.form.get("question", "").strip()
+    if not question or len(question) > AI_QUESTION_MAX_LENGTH:
+        return jsonify(
+            success=False,
+            message=f"Escribe una pregunta de hasta {AI_QUESTION_MAX_LENGTH} caracteres.",
+        ), 400
+
+    worker_env = request.environ.get("workers.env")
+    try:
+        provider = CloudflareWorkersAIProvider(
+            worker_env,
+            get_workers_ai_model(worker_env),
+        )
+    except AIUnavailableError:
+        return jsonify(
+            success=False,
+            fallback=True,
+            message="El asistente de IA no está configurado. Puedes usar esta guía básica.",
+            answer=fallback_answer(question),
+        ), 503
+
+    user_id = session.get("usuario_id")
+    if not isinstance(user_id, int) or not reserve_ai_request(user_id):
+        return jsonify(
+            success=False,
+            fallback=True,
+            message=(
+                "El asistente alcanzó temporalmente su límite. "
+                "Puedes continuar usando las funciones normales de ConectaTalento."
+            ),
+            answer=fallback_answer(question),
+        ), 429
+
+    try:
+        answer = provider.generate(
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": question},
+            ],
+            max_tokens=350,
+        )
+    except AIProviderError:
+        app.logger.warning(
+            "Workers AI request failed for user %s; returning career guidance fallback.",
+            user_id,
+        )
+        return jsonify(
+            success=False,
+            fallback=True,
+            message=(
+                "El asistente de IA no está disponible ahora. "
+                "Puedes continuar usando las funciones normales de ConectaTalento."
+            ),
+            answer=fallback_answer(question),
+        ), 503
+
+    return jsonify(success=True, answer=answer, source="workers_ai")
+
+
+@app.route("/api/postulante/revisar-perfil", methods=["POST"])
+def postulante_revisar_perfil():
+    if session.get("rol") != "POSTULANTE":
+        abort(403)
+    user_id = session.get("usuario_id")
+    if not isinstance(user_id, int):
+        abort(403)
+
+    placeholder = "?" if Config.USE_SQLITE else "%s"
+    conn = get_db()
+    profile = conn.cursor().execute(
+        f"""
+        SELECT habilidades, experiencia, educacion
+        FROM postulantes
+        WHERE usuario_id = {placeholder}
+        """,
+        (user_id,),
+    ).fetchone()
+    conn.close()
+    profile_context = {
+        "declared_skills": (profile["habilidades"] or "")[:500] if profile else "",
+        "declared_experience": (profile["experiencia"] or "")[:1000] if profile else "",
+        "declared_education": (profile["educacion"] or "")[:500] if profile else "",
+    }
+
+    worker_env = request.environ.get("workers.env")
+    try:
+        provider = CloudflareWorkersAIProvider(
+            worker_env,
+            get_workers_ai_model(worker_env),
+        )
+    except AIUnavailableError:
+        return jsonify(
+            success=False,
+            fallback=True,
+            message="La revisión con IA no está configurada. Puedes usar estas sugerencias.",
+            answer=fallback_profile_review(profile_context),
+        ), 503
+
+    if not reserve_ai_request(user_id):
+        return jsonify(
+            success=False,
+            fallback=True,
+            message="Se alcanzó temporalmente el límite. Inténtalo más tarde.",
+            answer=fallback_profile_review(profile_context),
+        ), 429
+
+    try:
+        answer = provider.generate(
+            build_profile_review_messages(profile_context),
+            max_tokens=350,
+        )
+    except AIProviderError:
+        app.logger.warning(
+            "Workers AI profile review failed for user %s.",
+            user_id,
+        )
+        return jsonify(
+            success=False,
+            fallback=True,
+            message="La revisión con IA no está disponible ahora. Puedes usar estas sugerencias.",
+            answer=fallback_profile_review(profile_context),
+        ), 503
+
+    return jsonify(success=True, answer=answer, source="workers_ai")
+
+
+@app.route("/postulante/practicar-entrevista")
+def postulante_practicar_entrevista():
+    if session.get("rol") != "POSTULANTE":
+        return redirect(url_for("login"))
+
+    placeholder = "?" if Config.USE_SQLITE else "%s"
+    conn = get_db()
+    applications = conn.cursor().execute(
+        f"""
+        SELECT o.id AS oferta_id, o.titulo, e.nombre_empresa, p.estado
+        FROM postulaciones p
+        JOIN ofertas o ON o.id = p.oferta_id
+        JOIN empresas e ON e.id = o.empresa_id
+        JOIN postulantes po ON po.id = p.postulante_id
+        WHERE po.usuario_id = {placeholder}
+        ORDER BY p.fecha_postulacion DESC
+        """,
+        (session["usuario_id"],),
+    ).fetchall()
+    conn.close()
+    return render_template(
+        "postulante/practicar_entrevista.html",
+        applications=applications,
+    )
+
+
+@app.route("/api/postulante/practicar-entrevista", methods=["POST"])
+def postulante_practicar_entrevista_responder():
+    if session.get("rol") != "POSTULANTE":
+        abort(403)
+
+    mode = request.form.get("mode", "").strip()
+    answer = request.form.get("answer", "").strip()
+    try:
+        oferta_id = int(request.form.get("oferta_id", ""))
+    except (TypeError, ValueError):
+        return jsonify(success=False, message="Selecciona una postulación válida."), 400
+
+    if mode not in {"question", "feedback"}:
+        return jsonify(success=False, message="Tipo de práctica no válido."), 400
+    if mode == "feedback" and not answer:
+        return jsonify(success=False, message="Escribe tu respuesta para recibir comentarios."), 400
+    if len(answer) > AI_QUESTION_MAX_LENGTH:
+        return jsonify(
+            success=False,
+            message=f"La respuesta debe tener hasta {AI_QUESTION_MAX_LENGTH} caracteres.",
+        ), 400
+
+    placeholder = "?" if Config.USE_SQLITE else "%s"
+    conn = get_db()
+    cur = conn.cursor()
+    application = cur.execute(
+        f"""
+        SELECT o.titulo, o.descripcion, o.habilidades, o.requisitos,
+               o.experiencia_requerida, o.educacion_requerida,
+               po.habilidades AS habilidades_candidato,
+               po.experiencia AS experiencia_candidato
+        FROM postulaciones p
+        JOIN ofertas o ON o.id = p.oferta_id
+        JOIN postulantes po ON po.id = p.postulante_id
+        WHERE o.id = {placeholder} AND po.usuario_id = {placeholder}
+        LIMIT 1
+        """,
+        (oferta_id, session["usuario_id"]),
+    ).fetchone()
+    conn.close()
+    if application is None:
+        abort(404)
+
+    job_context = {
+        "title": (application["titulo"] or "")[:150],
+        "description": (application["descripcion"] or "")[:1500],
+        "skills": (application["habilidades"] or "")[:500],
+        "requirements": (application["requisitos"] or "")[:1000],
+        "experience_requirement": (application["experiencia_requerida"] or "")[:500],
+        "education_requirement": (application["educacion_requerida"] or "")[:500],
+    }
+    candidate_context = {
+        "declared_skills": (application["habilidades_candidato"] or "")[:500],
+        "declared_experience": (application["experiencia_candidato"] or "")[:1000],
+    }
+
+    worker_env = request.environ.get("workers.env")
+    try:
+        provider = CloudflareWorkersAIProvider(
+            worker_env,
+            get_workers_ai_model(worker_env),
+        )
+    except AIUnavailableError:
+        return jsonify(
+            success=False,
+            fallback=True,
+            message="La práctica con IA no está configurada. Puedes usar esta pregunta guía.",
+            answer=fallback_interview_answer(mode),
+        ), 503
+
+    user_id = session.get("usuario_id")
+    if not isinstance(user_id, int) or not reserve_ai_request(user_id):
+        return jsonify(
+            success=False,
+            fallback=True,
+            message=(
+                "El asistente alcanzó temporalmente su límite. "
+                "Puedes continuar usando las funciones normales de ConectaTalento."
+            ),
+            answer=fallback_interview_answer(mode),
+        ), 429
+
+    try:
+        answer_text = provider.generate(
+            build_interview_messages(
+                mode,
+                job_context,
+                candidate_context,
+                answer,
+            ),
+            max_tokens=350,
+        )
+    except AIProviderError:
+        app.logger.warning(
+            "Workers AI interview practice failed for user %s.",
+            user_id,
+        )
+        return jsonify(
+            success=False,
+            fallback=True,
+            message=(
+                "La práctica con IA no está disponible ahora. "
+                "Puedes continuar usando las funciones normales de ConectaTalento."
+            ),
+            answer=fallback_interview_answer(mode),
+        ), 503
+
+    return jsonify(success=True, answer=answer_text, source="workers_ai")
 
 
 @app.route("/empresa/dashboard")
@@ -1220,6 +1598,7 @@ def empresa_dashboard():
 
     ofertas = []
     postulaciones = []
+    resumen_ofertas = []
     entrevistas_pendientes = 0
     if empresa is not None:
         empresa_id = empresa["id"]
@@ -1230,7 +1609,8 @@ def empresa_dashboard():
             ).fetchall()
             postulaciones = cur.execute(
                 """
-                SELECT p.id, u.nombre, u.apellido, o.titulo, p.estado, p.fecha_postulacion
+                SELECT p.id, o.id AS oferta_id, u.nombre, u.apellido, o.titulo,
+                       p.estado, p.fecha_postulacion
                 FROM postulaciones p
                 JOIN postulantes po ON po.id = p.postulante_id
                 JOIN usuarios u ON u.id = po.usuario_id
@@ -1247,7 +1627,8 @@ def empresa_dashboard():
             ).fetchall()
             postulaciones = cur.execute(
                 """
-                SELECT p.id, u.nombre, u.apellido, o.titulo, p.estado, p.fecha_postulacion
+                SELECT p.id, o.id AS oferta_id, u.nombre, u.apellido, o.titulo,
+                       p.estado, p.fecha_postulacion
                 FROM postulaciones p
                 JOIN postulantes po ON po.id = p.postulante_id
                 JOIN usuarios u ON u.id = po.usuario_id
@@ -1257,6 +1638,34 @@ def empresa_dashboard():
                 """,
                 (empresa_id,),
             ).fetchall()
+        estados_postulacion = (
+            "POSTULADO",
+            "REVISION",
+            "PRESELECCIONADO",
+            "ENTREVISTA",
+            "SELECCIONADO",
+            "RECHAZADO",
+            "FINALIZADO",
+        )
+        conteos_por_oferta = {}
+        for postulacion in postulaciones:
+            conteos = conteos_por_oferta.setdefault(
+                postulacion["oferta_id"],
+                {"total": 0, **{estado: 0 for estado in estados_postulacion}},
+            )
+            conteos["total"] += 1
+            if postulacion["estado"] in estados_postulacion:
+                conteos[postulacion["estado"]] += 1
+        resumen_ofertas = [
+            {
+                "oferta": oferta,
+                "conteos": conteos_por_oferta.get(
+                    oferta["id"],
+                    {"total": 0, **{estado: 0 for estado in estados_postulacion}},
+                ),
+            }
+            for oferta in ofertas
+        ]
         interviews_placeholder = "?" if Config.USE_SQLITE else "%s"
         entrevistas_pendientes = cur.execute(
             f"""
@@ -1273,6 +1682,7 @@ def empresa_dashboard():
         "empresa/dashboard.html",
         ofertas=ofertas,
         postulaciones=postulaciones,
+        resumen_ofertas=resumen_ofertas,
         ofertas_activas=sum(1 for oferta in ofertas if oferta["estado"] == "ACTIVA"),
         en_revision=sum(1 for item in postulaciones if item["estado"] == "REVISION"),
         preseleccionados=sum(1 for item in postulaciones if item["estado"] == "PRESELECCIONADO"),
@@ -1476,9 +1886,22 @@ def ofertas():
         """,
         tuple(params),
     ).fetchall()
+    ofertas = [dict(row) for row in rows]
     ofertas_favoritas = set()
+    habilidades_postulante = None
     if session.get("rol") == "POSTULANTE":
         user_placeholder = "?" if Config.USE_SQLITE else "%s"
+        perfil = cur.execute(
+            f"""
+            SELECT habilidades, experiencia, educacion, descripcion,
+                   objetivo_profesional
+            FROM postulantes
+            WHERE usuario_id = {user_placeholder}
+            """,
+            (session["usuario_id"],),
+        ).fetchone()
+        if perfil is not None:
+            habilidades_postulante = perfil["habilidades"] or ""
         ofertas_favoritas = {
             row["oferta_id"]
             for row in cur.execute(
@@ -1491,13 +1914,22 @@ def ofertas():
                 (session["usuario_id"],),
             ).fetchall()
         }
+    if habilidades_postulante and habilidades_postulante.strip():
+        for oferta in ofertas:
+            oferta["analisis_compatibilidad"] = analizar_compatibilidad(
+                habilidades_postulante,
+                oferta["habilidades"] or "",
+            )
     conn.close()
 
     return render_template(
         "ofertas.html",
-        ofertas=rows,
+        ofertas=ofertas,
         filtros=filtros,
         ofertas_favoritas=ofertas_favoritas,
+        mostrar_compatibilidad=bool(
+            habilidades_postulante and habilidades_postulante.strip()
+        ),
     )
 
 
@@ -1532,7 +1964,11 @@ def oferta_detalle(oferta_id):
             habilidades_postulante = []
             habilidades_postulante = (postulante["habilidades"] or "").split(",")
             oferta_habilidades = (oferta["habilidades"] or "").split(",")
-            compatibilidad = calcular_compatibilidad(habilidades_postulante, oferta_habilidades)
+            analisis_compatibilidad = analizar_compatibilidad(
+                habilidades_postulante,
+                oferta_habilidades,
+                dict(postulante),
+            )
             placeholder = "?" if Config.USE_SQLITE else "%s"
             oferta_guardada = cur.execute(
                 f"""
@@ -1542,17 +1978,17 @@ def oferta_detalle(oferta_id):
                 (postulante["id"], oferta_id),
             ).fetchone() is not None
         else:
-            compatibilidad = 0
+            analisis_compatibilidad = None
             oferta_guardada = False
         conn.close()
     else:
-        compatibilidad = None
+        analisis_compatibilidad = None
         oferta_guardada = False
 
     return render_template(
         "oferta_detalle.html",
         oferta=oferta,
-        compatibilidad=compatibilidad,
+        analisis_compatibilidad=analisis_compatibilidad,
         oferta_guardada=oferta_guardada,
     )
 
@@ -1902,7 +2338,9 @@ def empresa_candidatos():
     rows = cur.execute(
         f"""
         SELECT p.id, u.nombre, u.apellido, o.titulo, p.estado, p.fecha_postulacion,
-               po.ciudad, po.habilidades AS habilidades_postulante,
+               o.id AS oferta_id,
+               po.ciudad, po.descripcion, po.objetivo_profesional,
+               po.habilidades AS habilidades_postulante,
                po.experiencia, po.educacion, o.habilidades AS habilidades_oferta
         FROM postulaciones p
         JOIN postulantes po ON po.id = p.postulante_id
@@ -1914,19 +2352,32 @@ def empresa_candidatos():
         (empresa["id"],),
     ).fetchall()
     filtros = {
+        "oferta_id": request.args.get("oferta_id", "").strip(),
         "estado": request.args.get("estado", "").strip().upper(),
         "ciudad": request.args.get("ciudad", "").strip().lower(),
         "habilidad": request.args.get("habilidad", "").strip().lower(),
         "experiencia": request.args.get("experiencia", "").strip().lower(),
         "educacion": request.args.get("educacion", "").strip().lower(),
     }
+    ofertas_empresa = cur.execute(
+        f"SELECT id, titulo FROM ofertas WHERE empresa_id = {placeholder} ORDER BY id DESC",
+        (empresa["id"],),
+    ).fetchall()
     postulaciones = []
     for row in rows:
         item = dict(row)
-        item["compatibilidad"] = calcular_compatibilidad(
+        analisis = analizar_compatibilidad(
             (item["habilidades_postulante"] or "").split(","),
             (item["habilidades_oferta"] or "").split(","),
+            {
+                "habilidades": item["habilidades_postulante"],
+                "experiencia": item["experiencia"],
+                "educacion": item["educacion"],
+            },
         )
+        item["analisis_compatibilidad"] = analisis
+        if filtros["oferta_id"] and str(item["oferta_id"]) != filtros["oferta_id"]:
+            continue
         if filtros["estado"] and item["estado"] != filtros["estado"]:
             continue
         if filtros["ciudad"] and filtros["ciudad"] not in (item["ciudad"] or "").lower():
@@ -1942,6 +2393,7 @@ def empresa_candidatos():
     return render_template(
         "empresa/candidatos.html",
         postulaciones=postulaciones,
+        ofertas=ofertas_empresa,
         filtros=filtros,
         estados=("POSTULADO", "REVISION", "PRESELECCIONADO", "ENTREVISTA", "SELECCIONADO", "RECHAZADO", "FINALIZADO"),
     )
@@ -1952,7 +2404,9 @@ def get_owned_application(cursor, postulacion_id, usuario_empresa_id):
     return cursor.execute(
         f"""
         SELECT p.id, p.oferta_id, p.postulante_id, p.estado, p.fecha_postulacion, p.observacion,
-               o.titulo, u.nombre, u.apellido, u.correo,
+               o.titulo, o.habilidades AS habilidades_oferta,
+               o.experiencia_requerida, o.educacion_requerida, o.requisitos AS requisitos_oferta,
+               u.nombre, u.apellido, u.correo,
                po.telefono, po.ciudad, po.region, po.descripcion,
                po.objetivo_profesional, po.habilidades, po.experiencia, po.educacion,
                c.archivo AS curriculum_archivo, v.url AS video_url
@@ -1974,11 +2428,99 @@ def empresa_candidato_detalle(postulacion_id):
     if session.get("rol") != "EMPRESA":
         return redirect(url_for("login"))
     conn = get_db()
-    candidato = get_owned_application(conn.cursor(), postulacion_id, session["usuario_id"])
+    row = get_owned_application(conn.cursor(), postulacion_id, session["usuario_id"])
     conn.close()
-    if candidato is None:
+    if row is None:
         abort(404)
+    candidato = dict(row)
+    candidato["analisis_compatibilidad"] = analizar_compatibilidad(
+        (candidato["habilidades"] or "").split(","),
+        (candidato["habilidades_oferta"] or "").split(","),
+        candidato,
+    )
     return render_template("empresa/candidato_detalle.html", candidato=candidato)
+
+
+@app.route("/api/empresa/postulaciones/<int:postulacion_id>/preparar-entrevista", methods=["POST"])
+def empresa_preparar_entrevista(postulacion_id):
+    if session.get("rol") != "EMPRESA":
+        abort(403)
+
+    placeholder = "?" if Config.USE_SQLITE else "%s"
+    conn = get_db()
+    application = conn.cursor().execute(
+        f"""
+        SELECT o.titulo, o.habilidades, o.requisitos,
+               o.experiencia_requerida, o.educacion_requerida,
+               po.habilidades AS habilidades_candidato,
+               po.experiencia AS experiencia_candidato,
+               po.educacion AS educacion_candidato
+        FROM postulaciones p
+        JOIN ofertas o ON o.id = p.oferta_id
+        JOIN empresas e ON e.id = o.empresa_id
+        JOIN postulantes po ON po.id = p.postulante_id
+        WHERE p.id = {placeholder} AND e.usuario_id = {placeholder}
+        """,
+        (postulacion_id, session["usuario_id"]),
+    ).fetchone()
+    conn.close()
+    if application is None:
+        abort(404)
+
+    job_context = {
+        "title": (application["titulo"] or "")[:150],
+        "skills": (application["habilidades"] or "")[:500],
+        "requirements": (application["requisitos"] or "")[:1000],
+        "experience_requirement": (application["experiencia_requerida"] or "")[:300],
+        "education_requirement": (application["educacion_requerida"] or "")[:300],
+    }
+    candidate_context = {
+        "declared_skills": (application["habilidades_candidato"] or "")[:500],
+        "declared_experience": (application["experiencia_candidato"] or "")[:1000],
+        "declared_education": (application["educacion_candidato"] or "")[:500],
+    }
+
+    worker_env = request.environ.get("workers.env")
+    try:
+        provider = CloudflareWorkersAIProvider(
+            worker_env,
+            get_workers_ai_model(worker_env),
+        )
+    except AIUnavailableError:
+        return jsonify(
+            success=False,
+            fallback=True,
+            message="La ayuda con IA no está configurada. Puedes usar esta guía básica.",
+            answer=fallback_company_review(job_context, candidate_context),
+        ), 503
+
+    user_id = session.get("usuario_id")
+    if not isinstance(user_id, int) or not reserve_ai_request(user_id):
+        return jsonify(
+            success=False,
+            fallback=True,
+            message="Se alcanzó temporalmente el límite. Inténtalo más tarde.",
+            answer=fallback_company_review(job_context, candidate_context),
+        ), 429
+
+    try:
+        answer = provider.generate(
+            build_company_review_messages(job_context, candidate_context),
+            max_tokens=450,
+        )
+    except AIProviderError:
+        app.logger.warning(
+            "Workers AI company interview preparation failed for user %s.",
+            user_id,
+        )
+        return jsonify(
+            success=False,
+            fallback=True,
+            message="La ayuda con IA no está disponible ahora. Puedes usar esta guía básica.",
+            answer=fallback_company_review(job_context, candidate_context),
+        ), 503
+
+    return jsonify(success=True, answer=answer, source="workers_ai")
 
 
 @app.route("/empresa/postulaciones/<int:postulacion_id>/cv")

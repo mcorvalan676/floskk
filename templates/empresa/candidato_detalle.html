@@ -26,9 +26,72 @@
         </article>
     </div>
 
-    <section class="panel" style="margin-top:20px;">
-        <h2>Habilidades</h2>
+    <section class="panel" style="margin-top:20px;" aria-labelledby="candidate-skills-heading">
+        <h2 id="candidate-skills-heading">Habilidades</h2>
         <p>{{ candidato.habilidades or 'Sin habilidades registradas.' }}</p>
+        <h3>Resumen de coincidencia con la oferta</h3>
+        <p>
+            <strong>{{ candidato.analisis_compatibilidad.nivel }}</strong>
+            {% if candidato.analisis_compatibilidad.porcentaje is not none %}
+                · {{ candidato.analisis_compatibilidad.porcentaje }}%
+            {% endif %}
+        </p>
+        <p>{{ candidato.analisis_compatibilidad.explicacion }}</p>
+        {% if candidato.analisis_compatibilidad.coincidencias %}
+            <h4>Habilidades que coinciden</h4>
+            <ul>
+                {% for habilidad in candidato.analisis_compatibilidad.coincidencias %}
+                    <li>{{ habilidad }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+        {% if candidato.analisis_compatibilidad.requisitos_faltantes %}
+            <h4>Habilidades requeridas que no aparecen en el perfil</h4>
+            <ul>
+                {% for habilidad in candidato.analisis_compatibilidad.requisitos_faltantes %}
+                    <li>{{ habilidad }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+        {% if candidato.analisis_compatibilidad.campos_sin_informacion %}
+            <h4>Información no declarada en el perfil</h4>
+            <ul>
+                {% for campo in candidato.analisis_compatibilidad.campos_sin_informacion %}
+                    <li>{{ campo }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+        <p class="muted">{{ candidato.analisis_compatibilidad.criterio }}</p>
+        <section class="panel" aria-labelledby="interview-prep-heading">
+            <h3 id="interview-prep-heading">Preparar una entrevista</h3>
+            <p>
+                Genera un resumen de antecedentes laborales declarados y preguntas
+                neutrales basadas en la oferta. No entrega puntajes ni decide
+                contrataciones; revisa y confirma la información con la persona.
+            </p>
+            <p class="muted">
+                Si Workers AI está disponible, se envían solo los requisitos laborales
+                de la oferta y las habilidades, experiencia y educación declaradas.
+                No se incluyen los campos de nombre, contacto, CV ni observaciones de la postulación.
+            </p>
+            <form
+                data-company-review-form
+                data-endpoint="{{ url_for('empresa_preparar_entrevista', postulacion_id=candidato.id) }}"
+            >
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn secondary" type="submit" data-company-review-submit>
+                    Preparar guía de entrevista
+                </button>
+                <p data-company-review-status role="status" aria-live="polite"></p>
+                <div class="assistant-log" data-company-review-result aria-live="polite"></div>
+            </form>
+        </section>
+        {% if candidato.experiencia_requerida %}
+            <p><strong>Experiencia solicitada:</strong> {{ candidato.experiencia_requerida }}</p>
+        {% endif %}
+        {% if candidato.educacion_requerida %}
+            <p><strong>Educación solicitada:</strong> {{ candidato.educacion_requerida }}</p>
+        {% endif %}
         {% if candidato.curriculum_archivo %}
             <a class="btn primary" href="{{ url_for('empresa_candidato_cv', postulacion_id=candidato.id) }}">Descargar CV privado</a>
         {% else %}

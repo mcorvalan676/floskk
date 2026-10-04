@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Asistente laboral{% endblock %}
+{% block content %}
+<section class="dashboard">
+    <span class="eyebrow">APOYO PARA TU BÚSQUEDA LABORAL</span>
+    <h1>Asistente laboral</h1>
+    <p class="muted">
+        Pregunta sobre currículums, postulaciones, ofertas y preparación para entrevistas.
+    </p>
+
+    <div class="assistant-shell panel">
+        <p class="alert info">
+            Tus preguntas se envían a Cloudflare Workers AI cuando está disponible.
+            No se adjuntan tu perfil ni tu CV y esta conversación no se guarda.
+            Evita escribir datos personales o información confidencial.
+        </p>
+        <section class="panel" aria-labelledby="profile-review-heading">
+            <h2 id="profile-review-heading">Revisar mi perfil profesional</h2>
+            <p>
+                Obtén sugerencias concretas para presentar tu experiencia. Solo al
+                pulsar el botón se envían a Workers AI las habilidades, experiencia
+                y educación que declaraste en tu perfil. No se envían nombre,
+                contacto, CV ni otros datos; el resultado no se guarda.
+            </p>
+            <form
+                data-profile-review-form
+                data-endpoint="{{ url_for('postulante_revisar_perfil') }}"
+            >
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn secondary" type="submit" data-profile-review-submit>
+                    Revisar mi perfil
+                </button>
+                <p data-profile-review-status role="status" aria-live="polite"></p>
+                <div class="assistant-log" data-profile-review-result aria-live="polite"></div>
+            </form>
+        </section>
+        <div class="assistant-prompts" aria-label="Preguntas sugeridas">
+            <button class="btn secondary small" type="button" data-assistant-prompt="¿Cómo puedo mejorar la descripción de mi experiencia en el currículum?">
+                Mejorar mi CV
+            </button>
+            <button class="btn secondary small" type="button" data-assistant-prompt="¿Cómo me preparo para una entrevista de trabajo?">
+                Preparar entrevista
+            </button>
+            <button class="btn secondary small" type="button" data-assistant-prompt="¿Cómo puedo describir mejor un proyecto sin inventar experiencia?">
+                Describir un proyecto
+            </button>
+        </div>
+
+        <div class="assistant-log" data-assistant-log aria-live="polite" aria-relevant="additions">
+            <p class="assistant-message assistant-message-help">
+                Puedo ayudarte con orientación laboral. Las respuestas son sugerencias;
+                revisa que representen fielmente tu experiencia.
+            </p>
+        </div>
+
+        <form
+            class="assistant-form"
+            data-assistant-form
+            data-endpoint="{{ url_for('postulante_asistente_responder') }}"
+        >
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label for="assistant-question">Tu pregunta</label>
+            <textarea
+                id="assistant-question"
+                name="question"
+                rows="3"
+                maxlength="1000"
+                required
+                placeholder="Por ejemplo: ¿cómo puedo explicar mejor mis habilidades?"
+            ></textarea>
+            <div class="assistant-form-footer">
+                <span class="muted">Máximo 1000 caracteres · No incluyas datos sensibles.</span>
+                <button class="btn primary" type="submit" data-assistant-submit>Enviar pregunta</button>
+            </div>
+            <p class="muted" data-assistant-status role="status"></p>
+        </form>
+    </div>
+</section>
+{% endblock %}

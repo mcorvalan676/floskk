@@ -11,6 +11,8 @@
         <a class="btn secondary" href="{{ url_for('postulante_favoritos') }}">Ofertas guardadas</a>
         <a class="btn secondary" href="{{ url_for('postulante_perfil') }}">Mi perfil</a>
         <a class="btn secondary" href="{{ url_for('postulante_notificaciones') }}">Notificaciones</a>
+        <a class="btn secondary" href="{{ url_for('postulante_asistente') }}">Asistente laboral</a>
+        <a class="btn secondary" href="{{ url_for('postulante_practicar_entrevista') }}">Practicar entrevista</a>
     </div>
 
     <div class="cards">
@@ -38,6 +40,22 @@
             {% endif %}
         </article>
     </div>
+
+    <section class="panel" style="margin-top:24px;" aria-labelledby="profile-checklist-heading">
+        <h2 id="profile-checklist-heading">Checklist de perfil</h2>
+        <p>Completar estos datos ayuda a presentar mejor tu experiencia. Incluye solo información verdadera y verificable.</p>
+        <ul>
+            {% for item in perfil_checklist %}
+                <li>
+                    <span aria-label="{{ 'Completado' if item.completo else 'Pendiente' }}">{{ '✓' if item.completo else '○' }}</span>
+                    {{ item.label }} — {{ 'completado' if item.completo else 'pendiente' }}
+                    {% if not item.completo %}
+                        <a href="{{ url_for('postulante_perfil') }}">Completar</a>
+                    {% endif %}
+                </li>
+            {% endfor %}
+        </ul>
+    </section>
 
     {% if proxima_entrevista %}
         <section class="panel" style="margin-top:24px;" aria-labelledby="next-interview-heading">

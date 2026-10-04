@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Practicar entrevista{% endblock %}
+{% block content %}
+<section class="dashboard">
+    <span class="eyebrow">PREPARACIÓN LABORAL</span>
+    <h1>Practica una entrevista</h1>
+    <p class="muted">
+        Ensaya con preguntas relacionadas con una oferta a la que ya postulaste.
+    </p>
+
+    {% if applications %}
+        <div class="assistant-shell panel">
+            <p class="alert info">
+                Se enviarán a Workers AI el título y requisitos de la oferta,
+                tus habilidades y experiencia declaradas, y la respuesta que
+                escribas. No se envían nombre, contacto ni el archivo CV.
+                La práctica no se guarda. Evita incluir datos personales.
+            </p>
+            <form
+                class="assistant-form"
+                data-interview-form
+                data-endpoint="{{ url_for('postulante_practicar_entrevista_responder') }}"
+            >
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <label for="interview-offer">Oferta postulada</label>
+                <select id="interview-offer" name="oferta_id" required>
+                    {% for application in applications %}
+                        <option value="{{ application.oferta_id }}">
+                            {{ application.titulo }} · {{ application.nombre_empresa }}
+                        </option>
+                    {% endfor %}
+                </select>
+
+                <div class="assistant-log" data-interview-log aria-live="polite" aria-relevant="additions">
+                    <p class="assistant-message assistant-message-help">
+                        Pide una pregunta para empezar. Responde con una experiencia
+                        real; la orientación es una sugerencia, no una evaluación laboral.
+                    </p>
+                </div>
+
+                <div class="assistant-prompts">
+                    <button class="btn primary" type="button" data-interview-question>
+                        Hacerme una pregunta
+                    </button>
+                </div>
+
+                <label for="interview-answer">Tu respuesta</label>
+                <textarea
+                    id="interview-answer"
+                    name="answer"
+                    rows="4"
+                    maxlength="1000"
+                    placeholder="Escribe una respuesta breve basada en algo que realmente hayas hecho."
+                ></textarea>
+                <div class="assistant-form-footer">
+                    <span class="muted">Máximo 1000 caracteres · No incluyas datos personales.</span>
+                    <button class="btn secondary" type="button" data-interview-feedback>
+                        Recibir comentarios
+                    </button>
+                </div>
+                <p class="muted" data-interview-status role="status"></p>
+            </form>
+        </div>
+    {% else %}
+        <div class="panel">
+            <h2>Aún no tienes postulaciones para practicar</h2>
+            <p>Cuando postules a una oferta, podrás practicar aquí con sus requisitos laborales.</p>
+            <a class="btn primary" href="{{ url_for('ofertas') }}">Explorar ofertas</a>
+        </div>
+    {% endif %}
+</section>
+{% endblock %}

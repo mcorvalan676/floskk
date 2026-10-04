@@ -6,6 +6,14 @@
     <h1>Postulaciones recibidas</h1>
 
     <form method="get" class="panel grid" aria-label="Filtrar candidatos">
+        <label>Oferta
+            <select name="oferta_id">
+                <option value="">Todas</option>
+                {% for oferta in ofertas %}
+                    <option value="{{ oferta.id }}" {% if filtros.oferta_id == oferta.id|string %}selected{% endif %}>{{ oferta.titulo }}</option>
+                {% endfor %}
+            </select>
+        </label>
         <label>Estado
             <select name="estado">
                 <option value="">Todos</option>
@@ -45,7 +53,13 @@
                     <tr>
                         <td><a href="{{ url_for('empresa_candidato_detalle', postulacion_id=item.id) }}">{{ item.nombre }} {{ item.apellido }}</a></td>
                         <td>{{ item.titulo }}</td>
-                        <td>{{ item.compatibilidad }}%</td>
+                        <td>
+                            <strong>{{ item.analisis_compatibilidad.nivel }}</strong>
+                            {% if item.analisis_compatibilidad.porcentaje is not none %}
+                                <br>{{ item.analisis_compatibilidad.porcentaje }}%
+                            {% endif %}
+                            <br><a href="{{ url_for('empresa_candidato_detalle', postulacion_id=item.id) }}">Ver explicación</a>
+                        </td>
                         <td>
                             <div class="stack">
                                 <span class="status {{ item.estado|lower }}">{{ item.estado }}</span>

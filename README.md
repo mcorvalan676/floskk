@@ -8,10 +8,15 @@ Plataforma escolar de reclutamiento y selección que conecta empresas con postul
 - Perfiles de postulante y empresa.
 - Ofertas activas con búsqueda por cargo, ciudad, tipo de contrato, jornada y habilidad.
 - Postulaciones sin duplicados; se exige un perfil y un CV PDF.
-- Historial de estados, cálculo orientativo de compatibilidad por habilidades y notificaciones al postulante y a la empresa.
+- Historial de estados, coincidencia explicable de habilidades y notificaciones al postulante y a la empresa.
 - Historial de postulaciones con estado anterior/nuevo y el usuario y rol que realizaron cada cambio.
 - Paneles con indicadores reales; el panel del postulante muestra su próxima entrevista y permite marcar notificaciones como leídas.
+- Checklist de perfil para postulantes, con campos pendientes y acceso directo para completarlos.
+- Guía local para adaptar el CV a las habilidades declaradas y a cada oferta, sin inventar competencias ni requerir IA.
+- Coincidencias explicables de habilidades directamente en el listado de ofertas para postulantes autenticados.
+- Panel empresarial con postulaciones agrupadas por oferta y acceso al filtrado de candidatos de cada vacante.
 - Los postulantes pueden guardar ofertas por separado de sus postulaciones y quitarlas cuando quieran.
+- Coincidencia explicable por habilidades y asistente laboral para postulantes, con límites y guía de respaldo si Workers AI no está disponible.
 - Gestión de candidatos limitada a postulaciones en ofertas de la empresa autenticada; filtros por estado, ciudad, habilidad, experiencia y educación.
 - CV privado descargable únicamente por su titular y por empresas relacionadas con una postulación.
 - Entrevistas con seguimiento de estado.
@@ -19,7 +24,19 @@ Plataforma escolar de reclutamiento y selección que conecta empresas con postul
 - Panel administrativo con estadísticas y activación/desactivación de cuentas empresariales y postulantes.
 - Servicio PHP de solo lectura que devuelve ofertas activas agrupadas por sector.
 
-Los videos se guardan como enlaces HTTP/HTTPS. La compatibilidad es una coincidencia sencilla de habilidades y no utiliza inteligencia artificial.
+Los videos se guardan como enlaces HTTP/HTTPS. La compatibilidad actual compara únicamente las habilidades declaradas en el perfil y en la oferta. Muestra coincidencias, habilidades requeridas que no aparecen en el perfil y campos de perfil sin información; no predice contrataciones.
+
+### Uso responsable de recomendaciones
+
+La coincidencia es una referencia informativa para ayudar a revisar una oferta o postulación, no una evaluación de la persona ni una decisión de selección. El porcentaje representa solamente la proporción de habilidades requeridas que también aparecen en el perfil; las etiquetas son **Alta** (75% o más), **Media** (40% a 74%) y **Baja** (menos de 40%). Si la oferta no declara habilidades, se informa que no hay datos suficientes en vez de mostrar un porcentaje. La experiencia y educación se muestran como información declarada, no se puntúan automáticamente. La plataforma no calcula probabilidades de contratación.
+
+La guía de CV por oferta se calcula localmente a partir de las habilidades declaradas y no necesita Workers AI. Invita a destacar ejemplos reales y advierte que no se deben presentar como propias habilidades que la persona no posee. El checklist de perfil solo señala campos vacíos; no califica a los postulantes.
+
+El asistente laboral para postulantes responde preguntas sobre CV, búsqueda de empleo, postulaciones y entrevistas. Solo envía a Workers AI el texto de la pregunta: no adjunta perfil ni CV y no guarda conversaciones. La práctica de entrevista solo está disponible para ofertas a las que el postulante ya postuló. Envía el título y requisitos laborales de esa oferta, las habilidades y experiencia que el postulante declaró y, al solicitar comentarios, su respuesta de práctica. No envía nombre, contacto ni el PDF del CV; tampoco guarda la pregunta o respuesta. Evita incluir datos personales o confidenciales. La IA apoya al usuario, no inventa credenciales y no decide contrataciones. En caso de falta de configuración, límite o error del proveedor, muestra una guía laboral básica y el resto de la aplicación sigue disponible.
+
+En el asistente, el postulante puede solicitar por separado una revisión de su perfil profesional. Solo al iniciar esa acción se envían a Workers AI las habilidades, experiencia y educación declaradas; no se incluye el nombre, contacto ni el archivo CV, y las sugerencias no se guardan. La revisión ayuda a presentar mejor hechos existentes y no debe usarse para inventar credenciales.
+
+En el perfil de cada postulación, la empresa también puede pedir una guía de entrevista con un resumen de antecedentes laborales declarados y preguntas neutrales basadas en los requisitos de la oferta. Esa petición transmite únicamente título y criterios laborales, habilidades, experiencia y educación declaradas; no incluye los campos de nombre, contacto, CV ni observaciones. La guía no puntúa ni recomienda contratar o rechazar, no se guarda y debe ser revisada por una persona. El acceso se limita a la empresa propietaria de la oferta.
 
 ## Tecnologías
 
@@ -154,6 +171,8 @@ Los formularios que modifican datos usan protección CSRF. En D1, el registro, e
 
    Usa una clave larga y aleatoria para `SECRET_KEY` y un token temporal independiente para `INITIAL_ADMIN_TOKEN`.
 
+   Workers AI se configura mediante el binding `AI` en `wrangler.jsonc`; el modelo predeterminado es `@cf/meta/llama-3.2-3b-instruct`. No se necesita una API key. El asistente limita cada pregunta a 1000 caracteres, a 5 solicitudes por minuto por usuario y a 30 solicitudes diarias para toda la aplicación. La asignación gratuita de Workers AI es compartida por la cuenta y tiene límites diarios; al agotarse, las llamadas pueden fallar y se ofrece una respuesta de respaldo. Revisa los [precios y la cuota actual de Workers AI](https://developers.cloudflare.com/workers-ai/platform/pricing/) antes de habilitarlo en producción.
+
 5. Despliega el Worker. En Windows, ejecuta `.\scripts\wrangler.ps1 deploy`. También puedes configurar el Worker conectado a GitHub con **Build command** vacío y **Deploy command** `python scripts/wrangler_build.py floskk`. Para validar sin publicar, ejecuta `python scripts/wrangler_build.py floskk --dry-run`.
 
 6. Crea la primera cuenta administradora en `https://<nombre-del-worker>.workers.dev/setup-admin`, usando el token temporal, tu correo y una contraseña de al menos 12 caracteres. Después elimina inmediatamente el secreto de bootstrap:
@@ -170,10 +189,11 @@ Los formularios que modifican datos usan protección CSRF. En D1, el registro, e
 |---|---|---|
 | `SECRET_KEY` | Secret de Worker | Firma segura de sesiones Flask. |
 | `INITIAL_ADMIN_TOKEN` | Secret temporal | Alta única del primer administrador; eliminar tras usar. |
-| `DB` | Binding D1 | Usuarios, perfiles, ofertas, postulaciones, entrevistas, notificaciones y CV PDF. |
+| `DB` | Binding D1 | Usuarios, perfiles, ofertas, postulaciones, entrevistas, notificaciones, CV PDF y límites de uso del asistente. |
+| `AI` | Binding Workers AI | Asistente laboral; procesa solamente la pregunta enviada por el postulante. |
 | `ASSETS` | Binding de assets | Lectura de templates Jinja y recursos CSS/JS empaquetados. |
 
-Las migraciones versionadas `migrations/` crean el esquema, los CV en D1, las ofertas guardadas y el historial auditable de cambios de postulaciones; las migraciones siguientes deben usar versiones posteriores. D1 tiene cuotas gratuitas y límites de almacenamiento/solicitudes de Cloudflare, sujetos a cambios: compruébalos en el panel antes de operaciones con mucho tráfico. Los registros y CV guardados en SQLite, MySQL o R2 no se copian automáticamente a D1.
+Las migraciones versionadas `migrations/` crean el esquema, los CV en D1, las ofertas guardadas, el historial auditable y el contador de uso del asistente; las migraciones siguientes deben usar versiones posteriores. D1 y Workers AI tienen cuotas gratuitas y límites sujetos a cambios: compruébalos en el panel y en la documentación enlazada antes de operaciones con mucho tráfico. Los registros y CV guardados en SQLite, MySQL o R2 no se copian automáticamente a D1.
 
 En una base MySQL existente, actualiza `seguimiento` antes de desplegar el código que registra actores:
 
@@ -214,3 +234,5 @@ python -m unittest discover -s tests -v
 ```
 
 El conjunto automatizado valida rutas de perfil, cambios de estado, notificaciones, entrevistas, renderizado Jinja, UTF-8, recursos estáticos, la migración D1 y el alta inicial del administrador. Las conexiones reales a D1, MySQL y el endpoint PHP requieren servicios configurados.
+
+Las pruebas del asistente y la práctica de entrevista usan un proveedor simulado; no necesitan llamadas de red ni credenciales de Cloudflare.

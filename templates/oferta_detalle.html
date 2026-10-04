@@ -25,9 +25,60 @@
         </div>
 
         <div class="panel">
-            {% if compatibilidad is not none %}
-                <h3>Compatibilidad</h3>
-                <p><strong>{{ compatibilidad }}%</strong> de coincidencia con tu perfil.</p>
+            {% if analisis_compatibilidad %}
+                <section aria-labelledby="matching-heading">
+                    <h3 id="matching-heading">Coincidencia con habilidades</h3>
+                    <p>
+                        <strong>{{ analisis_compatibilidad.nivel }}</strong>
+                        {% if analisis_compatibilidad.porcentaje is not none %}
+                            · {{ analisis_compatibilidad.porcentaje }}%
+                        {% endif %}
+                    </p>
+                    <p>{{ analisis_compatibilidad.explicacion }}</p>
+                    {% if analisis_compatibilidad.coincidencias %}
+                        <h4>Habilidades que coinciden</h4>
+                        <ul>
+                            {% for habilidad in analisis_compatibilidad.coincidencias %}
+                                <li>{{ habilidad }}</li>
+                            {% endfor %}
+                        </ul>
+                    {% endif %}
+                    {% if analisis_compatibilidad.requisitos_faltantes %}
+                        <h4>Habilidades requeridas que no aparecen en tu perfil</h4>
+                        <ul>
+                            {% for habilidad in analisis_compatibilidad.requisitos_faltantes %}
+                                <li>{{ habilidad }}</li>
+                            {% endfor %}
+                        </ul>
+                    {% endif %}
+                    {% if analisis_compatibilidad.campos_sin_informacion %}
+                        <h4>Información que podrías completar</h4>
+                        <ul>
+                            {% for campo in analisis_compatibilidad.campos_sin_informacion %}
+                                <li>{{ campo }}</li>
+                            {% endfor %}
+                        </ul>
+                    {% endif %}
+                    <p class="muted">{{ analisis_compatibilidad.criterio }}</p>
+                </section>
+
+                <section aria-labelledby="cv-guidance-heading">
+                    <h3 id="cv-guidance-heading">Prepara tu CV para esta oferta</h3>
+                    {% if analisis_compatibilidad.coincidencias %}
+                        <p>Considera destacar con ejemplos reales estas habilidades que ya declaraste:</p>
+                        <ul>
+                            {% for habilidad in analisis_compatibilidad.coincidencias %}
+                                <li>{{ habilidad }}</li>
+                            {% endfor %}
+                        </ul>
+                    {% else %}
+                        <p>Tu perfil no declara coincidencias con las habilidades listadas. Revisa tu perfil y añade únicamente las que realmente posees.</p>
+                    {% endif %}
+                    {% if analisis_compatibilidad.requisitos_faltantes %}
+                        <p>La oferta también menciona: {{ analisis_compatibilidad.requisitos_faltantes|join(', ') }}. Si tienes experiencia real relacionada, descríbela; si no, no la presentes como una habilidad propia.</p>
+                    {% endif %}
+                    <p>Para cada experiencia relevante, explica brevemente el contexto, lo que hiciste y un resultado concreto. <a href="{{ url_for('postulante_perfil') }}">Actualizar mi perfil</a></p>
+                </section>
             {% endif %}
 
             {% if session.get('rol') == 'POSTULANTE' %}

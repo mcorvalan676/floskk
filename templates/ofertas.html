@@ -5,6 +5,11 @@
     <span class="eyebrow">OPORTUNIDADES</span>
     <h1>Ofertas disponibles</h1>
     <p class="muted">Explora las vacantes publicadas por las empresas.</p>
+    {% if mostrar_compatibilidad %}
+        <p class="muted">La coincidencia compara tus habilidades declaradas con las que menciona cada oferta. Es solo una referencia informativa; no evalúa a las personas ni predice contrataciones.</p>
+    {% elif session.get('rol') == 'POSTULANTE' %}
+        <p class="muted">Completa las habilidades de tu perfil para ver coincidencias explicables con cada oferta.</p>
+    {% endif %}
 
     <form method="get" class="panel grid" aria-label="Buscar ofertas">
         <label>Cargo
@@ -35,6 +40,22 @@
                         <span>{{ oferta.ubicacion or 'Remoto' }}</span>
                         <span>{{ oferta.tipo_contrato or 'No especificado' }}</span>
                     </div>
+                    {% if oferta.analisis_compatibilidad %}
+                        <p>
+                            <strong>Coincidencia de habilidades: {{ oferta.analisis_compatibilidad.nivel }}</strong>
+                            {% if oferta.analisis_compatibilidad.porcentaje is not none %}
+                                · {{ oferta.analisis_compatibilidad.porcentaje }}%
+                            {% else %}
+                                · Esta oferta no especifica habilidades para comparar.
+                            {% endif %}
+                        </p>
+                        {% if oferta.analisis_compatibilidad.coincidencias %}
+                            <p>Coinciden: {{ oferta.analisis_compatibilidad.coincidencias|join(', ') }}.</p>
+                        {% endif %}
+                        {% if oferta.analisis_compatibilidad.requisitos_faltantes %}
+                            <p>La oferta también menciona: {{ oferta.analisis_compatibilidad.requisitos_faltantes|join(', ') }}.</p>
+                        {% endif %}
+                    {% endif %}
                     <p>{{ oferta.descripcion[:180] }}{% if oferta.descripcion|length > 180 %}...{% endif %}</p>
                 </div>
                 <div class="stack" style="min-width:160px;">

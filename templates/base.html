@@ -25,6 +25,8 @@
             <a href="{{ url_for('ofertas') }}">Ofertas</a>
             <a href="{{ url_for('postulante_favoritos') }}">Guardadas</a>
             <a href="{{ url_for('postulante_dashboard') }}">Mi panel</a>
+            <a href="{{ url_for('postulante_asistente') }}">Asistente laboral</a>
+            <a href="{{ url_for('postulante_practicar_entrevista') }}">Practicar entrevista</a>
         {% elif session.get('rol') == 'EMPRESA' %}
             <a href="{{ url_for('empresa_dashboard') }}">Mi panel</a>
             <a href="{{ url_for('empresa_candidatos') }}">Candidatos</a>

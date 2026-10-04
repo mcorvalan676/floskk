@@ -172,6 +172,7 @@ class PrivacyAndUploadsTest(unittest.TestCase):
                 "cv_archivos",
                 "entrevistas",
                 "notificaciones",
+                "ai_usage",
             }.issubset(tables)
         )
         self.assertTrue(
